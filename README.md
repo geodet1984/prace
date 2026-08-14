@@ -237,6 +237,30 @@ Na otázku, jestli má aplikace sama sbírat zprávy a nabízet obchody:
 **jako signál ne, jako řízení rizika ano.** Podrobnosti a čísla
 v [KRYPTO.md](KRYPTO.md).
 
+### Blackout kolem plánovaných událostí
+
+Ta obhajitelná polovina: neotvírat nové pozice před zasedáním Fedu,
+zveřejněním inflace nebo výsledků firmy. Nic to nepředpovídá — jen to omezuje
+riziko mezery, kterou stop-loss nezachytí.
+
+```bash
+python -m trading backtest --symbols SPY,QQQ --start 2015-01-01 \
+    --calendar data/udalosti.csv --blackout-before 1
+```
+
+Kalendář je prosté CSV se sloupci `date,name,symbol` (prázdný symbol = makro
+událost pro všechny tituly). Vzor včetně odkazů na oficiální zdroje termínů
+je v `data/udalosti-vzor.csv`.
+
+Použít v backtestu skutečné historické termíny **není** pohled do budoucnosti:
+Fed publikuje data zasedání rok dopředu, takže v den obchodu ta informace
+existovala. Tím se to zásadně liší od makro *hodnot*, které chodí se zpožděním
+a ještě se revidují.
+
+Blackout blokuje **jen vstupy**. Otevřené pozice se dál řídí svými stopy —
+zavírat všechno před každou událostí by znamenalo platit skluz navíc a přijít
+o trendy, které přes ni prošly bez úhony.
+
 ## Připojení brokera
 
 Vrstva `trading/brokers/` odděluje rozhodování od provádění. Strategie

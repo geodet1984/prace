@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 import pandas as pd
 
 from . import indicators as ind
+from .calendar import EventCalendar
 from .execution import CostModel
 from .models import BacktestResult, Order, Side, SignalType
 from .portfolio import InsufficientFunds, Portfolio
@@ -65,6 +66,15 @@ class BacktestConfig:
     Zapíná se až po ``min_trades`` obchodech; do té doby drží základní
     velikost pozice.
     """
+
+    calendar: EventCalendar | None = None
+    """Kalendář plánovaných událostí. None = blackout vypnutý."""
+
+    blackout_days_before: int = 1
+    """Kolik dní před událostí se neotvírají nové pozice."""
+
+    blackout_days_after: int = 0
+    """Kolik dní po události se neotvírají nové pozice."""
 
 
 class BacktestEngine:
@@ -290,6 +300,12 @@ class BacktestEngine:
                 self._rejected += 1
                 continue
 
+            blackout = self._blackout_reason(timestamp, symbol)
+            if blackout is not None:
+                self._rejected += 1
+                logger.debug("%s: vstup odložen — %s", symbol, blackout)
+                continue
+
             decision = self.risk.size_position(
                 equity=equity,
                 cash=self.portfolio.cash - self._reserved_cash(bars),
@@ -315,6 +331,22 @@ class BacktestEngine:
             )
 
     # --- pomocné ---------------------------------------------------------
+
+    def _blackout_reason(self, timestamp, symbol: str) -> str | None:
+        """Brání blackout kolem plánované události dnešnímu vstupu?
+
+        Blokuje jen **vstupy**. Otevřené pozice se dál řídí svými stopy —
+        zavírat všechno před zasedáním Fedu by znamenalo platit skluz navíc
+        a přijít o trendy, které přes událost prošly bez úhony.
+        """
+        if self.config.calendar is None:
+            return None
+        return self.config.calendar.blackout_reason(
+            timestamp,
+            symbol,
+            self.config.blackout_days_before,
+            self.config.blackout_days_after,
+        )
 
     def _pending_buys(self) -> int:
         return sum(1 for o in self._pending.values() if o.side is Side.BUY)

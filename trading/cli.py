@@ -22,6 +22,7 @@ from . import stats as stats_module
 from . import strategies
 from .backtest import BacktestConfig, BacktestEngine
 from .benchmark import buy_and_hold
+from .calendar import EventCalendar
 from .execution import COST_PRESETS
 from .live import PaperTrader, make_config
 from .metrics import analyze, equity_series
@@ -87,6 +88,15 @@ def _config_from_args(args, close_at_end: bool = True) -> BacktestConfig:
     )
     kelly = KellyConfig(fraction=args.kelly) if args.kelly else None
 
+    calendar = None
+    if getattr(args, "calendar", None):
+        try:
+            calendar = EventCalendar.from_csv(args.calendar)
+        except FileNotFoundError as exc:
+            raise SystemExit(str(exc)) from None
+        if not calendar:
+            logger.warning("kalendář %s je prázdný — blackout se neuplatní", args.calendar)
+
     # Nejtišší způsob, jak si vyrobit mrtvý systém: nechat výchozí minimální
     # hodnotu pozice na malém účtu. Engine pak jen zamítá signál za signálem
     # a report ukáže nula obchodů, aniž by řekl proč.
@@ -109,6 +119,9 @@ def _config_from_args(args, close_at_end: bool = True) -> BacktestConfig:
         vol_target=vol_target,
         kelly=kelly,
         periods_per_year=args.periods_per_year,
+        calendar=calendar,
+        blackout_days_before=getattr(args, "blackout_before", 1),
+        blackout_days_after=getattr(args, "blackout_after", 0),
     )
 
 
@@ -319,6 +332,12 @@ def cmd_signals(args) -> int:
         )
     print("─" * 62)
     print("Signál je návrh, ne příkaz. Velikost pozice a stop dopočítá risk manager.")
+
+    config = _config_from_args(args)
+    if config.calendar:
+        latest = max(max(rows) for rows in prepared.values())
+        print()
+        print(config.calendar.describe(latest, within_days=21))
     return 0
 
 
@@ -511,6 +530,19 @@ def build_parser() -> argparse.ArgumentParser:
             type=float,
             default=None,
             help="zlomkové Kelly, např. 0.25 pro čtvrtinové (vypnuto = pevná velikost)",
+        )
+        p.add_argument(
+            "--calendar",
+            help="CSV s plánovanými událostmi (sloupce date,name[,symbol]) pro blackout",
+        )
+        p.add_argument(
+            "--blackout-before",
+            type=int,
+            default=1,
+            help="dní před událostí, kdy se neotvírají nové pozice",
+        )
+        p.add_argument(
+            "--blackout-after", type=int, default=0, help="dní po události bez nových pozic"
         )
         p.add_argument(
             "--reentry-cooldown",
