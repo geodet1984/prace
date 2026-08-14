@@ -88,6 +88,12 @@ přesně ten druh závěru, proti kterému je celý `stats.py`.
   engine je obsadí podle pořadí symbolů, ne podle síly signálu. Viz
   UNIVERZUM.md.
 
+## Kde jsme
+
+Rozhodnutí, otevřené otázky a seznam chyb, které se cestou našly, jsou
+v [STAV.md](STAV.md). Přečtěte si ho dřív, než začnete něco měnit — drží
+*proč*, které by se z kódu rekonstruovalo těžko.
+
 ## Práce s repozitářem
 
 Vývojová větev: `claude/stock-trading-app-3vvbh8`. Commit messages česky,

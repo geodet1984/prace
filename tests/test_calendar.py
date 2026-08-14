@@ -164,11 +164,59 @@ def test_missing_csv_raises(tmp_path):
         EventCalendar.from_csv(tmp_path / "neexistuje.csv")
 
 
-def test_shipped_sample_calendar_parses():
+def _data_dir():
     from pathlib import Path
 
-    sample = Path(__file__).resolve().parent.parent / "data" / "udalosti-vzor.csv"
-    assert len(EventCalendar.from_csv(sample)) >= 1
+    return Path(__file__).resolve().parent.parent / "data"
+
+
+def test_shipped_sample_calendar_parses():
+    assert len(EventCalendar.from_csv(_data_dir() / "udalosti-vzor.csv")) >= 1
+
+
+def test_real_calendar_parses():
+    assert len(EventCalendar.from_csv(_data_dir() / "udalosti.csv")) >= 20
+
+
+def test_fomc_entries_all_fall_on_wednesdays():
+    """Zapsaný je druhý den zasedání, kdy vychází prohlášení — vždy středa.
+
+    Kdyby se při opisování z webu Fedu spletl den, tenhle test to chytí.
+    Zasedání je osm ročně a opisuje se ručně, takže překlep je reálné riziko.
+    """
+    calendar = EventCalendar.from_csv(_data_dir() / "udalosti.csv")
+    fomc = [e for e in calendar if e.name.startswith("FOMC")]
+    assert fomc, "kalendář musí obsahovat termíny FOMC"
+    for event in fomc:
+        assert event.day.weekday() == 2, f"{event} nepadá na středu"
+
+
+def test_fomc_has_eight_meetings_per_year():
+    """Fed zasedá osmkrát ročně. Chybějící termín by blackout tiše vynechal."""
+    from collections import Counter
+
+    calendar = EventCalendar.from_csv(_data_dir() / "udalosti.csv")
+    per_year = Counter(e.day.year for e in calendar if e.name.startswith("FOMC"))
+    for year, count in per_year.items():
+        assert count == 8, f"rok {year} má {count} zasedání místo osmi"
+
+
+def test_fomc_meetings_are_spread_across_the_year():
+    """Zasedání jsou po zhruba šesti až sedmi týdnech, ne nakupená."""
+    calendar = EventCalendar.from_csv(_data_dir() / "udalosti.csv")
+    days = sorted(e.day for e in calendar if e.name.startswith("FOMC"))
+    gaps = [(b - a).days for a, b in zip(days, days[1:], strict=False)]
+    assert all(28 <= gap <= 70 for gap in gaps), f"nepravidelné rozestupy: {gaps}"
+
+
+def test_cpi_entries_are_plausible_release_dates():
+    """CPI vychází v první polovině měsíce — ne přesně druhý týden, ale ne na konci."""
+    calendar = EventCalendar.from_csv(_data_dir() / "udalosti.csv")
+    cpi = [e for e in calendar if e.name == "CPI"]
+    assert cpi
+    for event in cpi:
+        assert 1 <= event.day.day <= 20, f"{event} je na neobvyklém dni v měsíci"
+        assert event.day.weekday() < 5, f"{event} padá na víkend"
 
 
 # --- pravidelné události ------------------------------------------------
