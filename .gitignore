@@ -18,3 +18,6 @@ data/*.tmp
 # na rozdíl od cache s tržními daty do repozitáře patří.
 !data/udalosti.csv
 !data/udalosti-vzor.csv
+# Vzor účetní knihy patří do repozitáře; data/portfolio.csv se skutečnými
+# obchody schválně ne — vaše pozice nejsou nikoho jiného věc.
+!data/portfolio-vzor.csv

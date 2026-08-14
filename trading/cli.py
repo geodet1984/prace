@@ -20,6 +20,7 @@ import pandas as pd
 from . import dashboard as dashboard_module
 from . import data as data_module
 from . import ensemble as ensemble_module
+from . import ledger as ledger_module
 from . import stats as stats_module
 from . import strategies
 from .backtest import BacktestConfig, BacktestEngine
@@ -316,6 +317,64 @@ def cmd_dashboard(args) -> int:
             file=sys.stderr,
         )
     return dashboard_module.serve(state, host=args.host, port=args.port)
+
+
+def cmd_ledger(args) -> int:
+    """Přehled skutečného portfolia. Nic neobchoduje, jen počítá.
+
+    Ceny se stahují jen pro ocenění otevřených pozic; není-li síť, použije
+    se cache a chybějící tituly se přiznají místo tichého odhadu.
+    """
+    kniha = ledger_module.Ledger.from_csv(args.kniha)
+    drzeno = kniha.holdings()
+
+    ceny: dict[str, float] = {}
+    for symbol in drzeno:
+        try:
+            df = data_module.fetch(symbol)
+            ceny[symbol] = float(df["close"].iloc[-1])
+        except (data_module.DataError, KeyError, IndexError) as exc:
+            logger.warning("%s: cenu se nepodařilo zjistit (%s)", symbol, exc)
+
+    v = kniha.valuation(ceny)
+    mena = kniha.transactions[0].currency if kniha.transactions else ""
+
+    print(f"\n  Portfolio — {len(kniha.transactions)} pohybů, {v['pozic']} titulů\n")
+    print(f"  Vloženo vlastních peněz   {v['vlozeno']:>12,.2f} {mena}")
+    print(f"  Hodnota portfolia         {v['hodnota']:>12,.2f} {mena}")
+    print(f"  {'-' * 44}")
+    print(f"  Nerealizovaný zisk        {v['nerealizovany_zisk']:>12,.2f} {mena}")
+    print(f"  Realizovaný zisk          {v['realizovany_zisk']:>12,.2f} {mena}")
+    print(f"  Dividendy                 {v['dividendy']:>12,.2f} {mena}")
+    print(f"  Daně                      {v['dane']:>12,.2f} {mena}")
+    print(f"  Poplatky mimo obchody     {v['poplatky']:>12,.2f} {mena}")
+    print(f"  {'=' * 44}")
+    print(f"  Celkem                    {v['celkem']:>12,.2f} {mena}")
+    if v["vlozeno"]:
+        print(f"  {'':26}{v['celkem'] / v['vlozeno'] * 100:>11.1f} % z vloženého")
+    if v["poplatky_v_obchodech"]:
+        # Zvlášť, a pod čarou: v součtu už jsou (uvnitř pořizovací ceny
+        # a výnosu). Přičíst je znovu by je odečetlo dvakrát.
+        print(
+            f"\n  Z toho poplatky za obchody {v['poplatky_v_obchodech']:>11,.2f} {mena}"
+            "  (už započtené v cenách)"
+        )
+
+    if v["bez_ceny"]:
+        print(f"\n  Bez aktuální ceny (oceněno pořizovací): {', '.join(v['bez_ceny'])}")
+
+    hodiny = [r for r in kniha.tax_clock() if not r["splneno"]]
+    if hodiny:
+        print("\n  Časový test — kdy dávky projdou tříletou lhůtou:")
+        for r in hodiny[:10]:
+            print(
+                f"    {r['symbol']:<6} {r['quantity']:>10,.3f} ks   "
+                f"nakoupeno {r['nakoupeno']}   osvobozeno {r['osvobozeno_od']}"
+                f"   (za {r['dni_zbyva']} dní)"
+            )
+        print("\n  Není to daňové poradenství — jen rozdíl dat z vašich zápisů.")
+    print()
+    return 0
 
 
 def cmd_signals(args) -> int:
@@ -649,6 +708,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_dash.add_argument("--port", type=int, default=8765, help="port (0 = vybrat volný)")
     p_dash.set_defaults(func=cmd_dashboard)
+
+    p_led = sub.add_parser("portfolio", help="přehled skutečného portfolia z účetní knihy")
+    p_led.add_argument("--kniha", default="data/portfolio.csv", help="CSV s pohyby")
+    p_led.set_defaults(func=cmd_ledger)
 
     p_fetch = sub.add_parser("fetch", help="stáhnout a nacachovat data")
     add_data_args(p_fetch)

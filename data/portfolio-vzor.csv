@@ -1,0 +1,32 @@
+# VZOR účetní knihy skutečného portfolia — ukázka formátu, ne vaše data.
+#
+# Vlastní knihu si založte jako data/portfolio.csv (ta je mimo git, protože
+# do repozitáře vaše obchody nepatří) a spusťte:
+#
+#     python -m trading portfolio --kniha data/portfolio.csv
+#
+# Sloupce:
+#   day       YYYY-MM-DD
+#   type      vklad | vyber | nakup | prodej | dividenda | dan | poplatek
+#   symbol    ticker; povinný u nákupu, prodeje a dividendy
+#   quantity  počet kusů (jen nákup/prodej), klidně desetinný
+#   price     cena za kus (jen nákup/prodej)
+#   amount    peněžní tok: kladný = přiteklo, záporný = odteklo
+#   fee       poplatek za obchod; u nákupu zvyšuje pořizovací cenu,
+#             u prodeje snižuje výnos — nezapisujte ho ještě zvlášť
+#   currency  měna účtu
+#   note      cokoli pro dohledání
+#
+# Oddělovač smí být čárka i středník. Exportuje-li váš Excel desetinnou
+# čárku, použijte středník — jinak se řádky rozsekají.
+#
+# Prodej se páruje s nákupy metodou FIFO, tedy od nejstaršího. Kvůli zisku
+# i kvůli tříleté lhůtě, která se počítá od data konkrétní dávky.
+day,type,symbol,quantity,price,amount,fee,currency,note
+2024-01-15,vklad,,,,50000.00,,CZK,první vklad
+2024-01-20,nakup,CSPX,2,480.50,-961.00,1.00,CZK,S&P 500 akumulační
+2024-03-15,nakup,CSPX,1,505.00,-505.00,1.00,CZK,přikoupeno
+2024-06-10,dividenda,VWCE,,,120.00,,CZK,čtvrtletní
+2024-06-10,dan,,,,-18.00,,CZK,srážková daň z dividendy
+2024-09-01,prodej,CSPX,1,530.00,530.00,1.00,CZK,odprodána nejstarší dávka
+2024-12-31,poplatek,,,,-150.00,,CZK,vedení účtu za rok
