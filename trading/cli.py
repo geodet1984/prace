@@ -4,6 +4,7 @@
     python -m trading compare  --symbols SPY --start 2015-01-01
     python -m trading paper    --symbols AAPL --strategy sma_crossover
     python -m trading signals  --symbols AAPL,MSFT
+    python -m trading dashboard
 """
 
 from __future__ import annotations
@@ -16,6 +17,7 @@ from pathlib import Path
 
 import pandas as pd
 
+from . import dashboard as dashboard_module
 from . import data as data_module
 from . import ensemble as ensemble_module
 from . import stats as stats_module
@@ -301,6 +303,19 @@ def cmd_paper(args) -> int:
     print()
     print(trader.status())
     return 0
+
+
+def cmd_dashboard(args) -> int:
+    """Rozjede přehled účtu v prohlížeči. Nic neobchoduje a nic neukládá."""
+    state = Path(args.state)
+    if not state.exists():
+        # Server by to řekl taky, ale až v prohlížeči. Tady je to vidět hned.
+        print(
+            f"Varování: stav účtu {state} zatím neexistuje. Přehled se rozjede, "
+            "ale bude prázdný, dokud účet nezaložíte přes ./scripts/start-demo.sh",
+            file=sys.stderr,
+        )
+    return dashboard_module.serve(state, host=args.host, port=args.port)
 
 
 def cmd_signals(args) -> int:
@@ -624,6 +639,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="schéma vážení složek",
     )
     p_ens.set_defaults(func=cmd_ensemble)
+
+    p_dash = sub.add_parser("dashboard", help="přehled paper účtu v prohlížeči (jen ke čtení)")
+    p_dash.add_argument("--state", default="data/paper_state.json", help="soubor se stavem účtu")
+    p_dash.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="adresa k poslouchání; výchozí loopback, do sítě stav účtu nepatří",
+    )
+    p_dash.add_argument("--port", type=int, default=8765, help="port (0 = vybrat volný)")
+    p_dash.set_defaults(func=cmd_dashboard)
 
     p_fetch = sub.add_parser("fetch", help="stáhnout a nacachovat data")
     add_data_args(p_fetch)

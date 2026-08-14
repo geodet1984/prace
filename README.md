@@ -184,9 +184,38 @@ proti standardní knihovně.
 | `ensemble` | Kombinace strategií a měření přínosu diverzifikace |
 | `signals` | Aktuální signály, nic neobchoduje |
 | `paper` | Posun paper účtu o nová data |
+| `dashboard` | Přehled paper účtu v prohlížeči, **jen ke čtení** |
 | `fetch` | Stažení a nacachování dat |
 
 Nápověda: `python -m trading <příkaz> --help`.
+
+## Přehled v prohlížeči
+
+```bash
+./scripts/dashboard.sh          # http://127.0.0.1:8765, otevře se samo
+```
+
+Ukazuje hodnotu účtu, propad od maxima, otevřené pozice se vzdáleností ke
+stopu, statistiku uzavřených obchodů a křivku realizovaného kapitálu.
+
+Tři věci, které o něm platí a je lepší je vědět předem:
+
+* **Nic neobchoduje.** Server umí jediné HTTP sloveso — `GET`. Zapisující
+  metody vrací 405 a stav účtu neotevírá jinak než ke čtení. Účet posouvá
+  výhradně `trading paper`. Kdyby to uměl i dashboard, vznikla by druhá cesta
+  k penězům, která nemá za sebou testy z `test_live.py`.
+* **Graf není equity křivka.** Engine si equity po barech do stavu neukládá,
+  takže křivka je nasčítaný zisk *uzavřených* obchodů. Otevřené pozice se
+  v ní objeví až ve chvíli, kdy se zavřou — proto je schodovitá.
+* **Ceny jsou z posledního zpracovaného baru**, ne z právě teď. Nad denními
+  bary nic jiného ani nedává smysl.
+
+Poslouchá se jen na loopbacku. `--host 0.0.0.0` sice funguje, ale vystavuje
+stav účtu do sítě bez jakéhokoli přihlášení — nedělejte to.
+
+Šablona `trading/ui/index.html` se čte při každém požadavku a stránka se sama
+obnoví, jakmile se soubor změní. Úpravy vzhledu jsou tedy vidět okamžitě, bez
+restartu serveru.
 
 ## Provoz na malém účtu
 

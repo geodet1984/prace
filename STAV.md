@@ -45,6 +45,8 @@ Ověřené testy (398 testů, `python -m pytest`):
 * mezera přes noc se plní za open, ne za stop
 * na čistém šumu vyjde PBO kolem 0,5 a deflated Sharpe zamítne
 * na ostrý účet neprojde příkaz bez explicitního povolení
+* dashboard do stavu účtu nezapíše ani při čtení a zapisující HTTP metody
+  odmítá — přehled není druhá cesta, jak hnout účtem
 
 **Neověřené:**
 

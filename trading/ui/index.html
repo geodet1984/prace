@@ -1,0 +1,443 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Paper účet — přehled</title>
+<style>
+/*
+  Jeden soubor, žádné závislosti. Dashboard běží na loopbacku ze standardní
+  knihovny, takže sem nesmí nic, co se stahuje z internetu.
+
+  Barvy jsou tlumené schválně. Terminál, kde svítí každé číslo, přestane
+  po chvíli sdělovat, co je důležité — zvýrazněný je propad od maxima
+  a vzdálenost ke stopu, protože podle těch dvou se dá něco udělat.
+*/
+:root {
+  color-scheme: dark light;
+
+  --bg:        #0c0e13;
+  --bg-panel:  #12151d;
+  --bg-inset:  #171b25;
+  --line:      #232936;
+  --line-soft: #1b202b;
+
+  --ink:       #e6e9f0;
+  --ink-dim:   #9aa3b5;
+  --ink-faint: #616b80;
+
+  --up:        #4ec9a0;
+  --up-soft:   #4ec9a01f;
+  --down:      #e06c75;
+  --down-soft: #e06c751f;
+  --warn:      #d9a441;
+  --warn-soft: #d9a4411a;
+  --accent:    #6aa5f0;
+
+  --radius: 10px;
+  --mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  --sans: ui-sans-serif, -apple-system, "Segoe UI", Inter, system-ui, sans-serif;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg:        #f6f7f9;
+    --bg-panel:  #ffffff;
+    --bg-inset:  #f1f3f6;
+    --line:      #dfe3ea;
+    --line-soft: #eceff4;
+    --ink:       #171a21;
+    --ink-dim:   #5a6376;
+    --ink-faint: #8b94a6;
+    --up:        #14875f;
+    --up-soft:   #14875f14;
+    --down:      #c0392f;
+    --down-soft: #c0392f14;
+    --warn:      #9a6d10;
+    --warn-soft: #d9a44118;
+    --accent:    #2f6fd0;
+  }
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  font-size: 14px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 1180px; margin: 0 auto; padding: 28px 24px 64px; }
+
+/* ── hlavička ─────────────────────────────────────────────────────── */
+header {
+  display: flex; flex-wrap: wrap; gap: 16px;
+  align-items: baseline; justify-content: space-between;
+  padding-bottom: 18px; margin-bottom: 24px;
+  border-bottom: 1px solid var(--line);
+}
+h1 { font-size: 17px; font-weight: 600; margin: 0; letter-spacing: -0.01em; }
+h1 .sub { color: var(--ink-faint); font-weight: 400; margin-left: 10px; font-family: var(--mono); font-size: 13px; }
+.meta { display: flex; gap: 18px; align-items: center; color: var(--ink-dim); font-size: 12px; font-family: var(--mono); }
+.dot { width: 7px; height: 7px; border-radius: 50%; background: var(--up); display: inline-block; margin-right: 6px; }
+.dot.stale { background: var(--ink-faint); }
+
+/* ── karty s čísly ────────────────────────────────────────────────── */
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(178px, 1fr)); gap: 12px; margin-bottom: 22px; }
+.tile {
+  background: var(--bg-panel); border: 1px solid var(--line);
+  border-radius: var(--radius); padding: 14px 16px 16px;
+}
+.tile .label { font-size: 11px; text-transform: uppercase; letter-spacing: 0.07em; color: var(--ink-faint); }
+.tile .value { font-family: var(--mono); font-size: 25px; font-weight: 500; margin-top: 6px; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.tile .note  { font-size: 12px; color: var(--ink-dim); margin-top: 4px; font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.tile.hero { grid-column: span 2; }
+@media (max-width: 640px) { .tile.hero { grid-column: span 1; } }
+
+.up { color: var(--up); }
+.down { color: var(--down); }
+.warn { color: var(--warn); }
+.dim { color: var(--ink-dim); }
+.faint { color: var(--ink-faint); }
+
+/* ── panely ───────────────────────────────────────────────────────── */
+section {
+  background: var(--bg-panel); border: 1px solid var(--line);
+  border-radius: var(--radius); margin-bottom: 18px; overflow: hidden;
+}
+.head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 12px;
+  padding: 13px 16px; border-bottom: 1px solid var(--line-soft);
+}
+.head h2 { font-size: 13px; font-weight: 600; margin: 0; letter-spacing: 0.01em; }
+.head .hint { font-size: 11.5px; color: var(--ink-faint); font-family: var(--mono); }
+.body { padding: 16px; }
+
+/* ── varování ─────────────────────────────────────────────────────── */
+.warnings { border-color: color-mix(in srgb, var(--warn) 35%, var(--line)); background: var(--warn-soft); }
+.warnings ul { margin: 0; padding: 0 0 0 18px; }
+.warnings li { margin: 5px 0; color: var(--ink); }
+.warnings li::marker { color: var(--warn); }
+
+/* ── graf ─────────────────────────────────────────────────────────── */
+.chart { width: 100%; height: 220px; display: block; }
+.chart .grid { stroke: var(--line-soft); stroke-width: 1; }
+.chart .curve { fill: none; stroke: var(--accent); stroke-width: 1.75; stroke-linejoin: round; }
+.chart .fill { fill: url(#grad); }
+.chart .base { stroke: var(--ink-faint); stroke-width: 1; stroke-dasharray: 3 3; opacity: .6; }
+.chart text { fill: var(--ink-faint); font-family: var(--mono); font-size: 10px; }
+
+/* ── tabulky ──────────────────────────────────────────────────────── */
+/* Na užším okně se tabulka nesmí uříznout — poslední sloupce (vzdálenost
+   ke stopu, důvod výstupu) jsou přesně ty, kvůli kterým se sem člověk dívá.
+   Roluje tabulka, ne celá stránka. */
+.scroll { overflow-x: auto; }
+table { width: 100%; min-width: 620px; border-collapse: collapse; font-family: var(--mono); font-size: 12.5px; font-variant-numeric: tabular-nums; }
+th {
+  text-align: right; font-weight: 500; font-size: 10.5px; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--ink-faint);
+  padding: 9px 16px; border-bottom: 1px solid var(--line-soft); white-space: nowrap;
+}
+td { text-align: right; padding: 8px 16px; border-bottom: 1px solid var(--line-soft); white-space: nowrap; }
+tr:last-child td { border-bottom: none; }
+tbody tr:hover td { background: var(--bg-inset); }
+th:first-child, td:first-child { text-align: left; }
+.sym { font-weight: 600; letter-spacing: 0.02em; }
+.tag {
+  display: inline-block; padding: 1px 7px; border-radius: 999px; font-size: 10.5px;
+  background: var(--bg-inset); color: var(--ink-dim); border: 1px solid var(--line);
+}
+.tag.stop { color: var(--down); border-color: color-mix(in srgb, var(--down) 40%, var(--line)); }
+.tag.signal { color: var(--accent); border-color: color-mix(in srgb, var(--accent) 40%, var(--line)); }
+
+/* Proužek "kolik zbývá ke stopu" — číslo samo o sobě se špatně porovnává
+   napříč řádky, pruh se čte jedním pohledem. */
+.gauge { display: inline-block; width: 54px; height: 5px; border-radius: 3px; background: var(--bg-inset); overflow: hidden; vertical-align: middle; margin-left: 8px; }
+.gauge i { display: block; height: 100%; background: var(--up); }
+.gauge i.near { background: var(--warn); }
+.gauge i.hot  { background: var(--down); }
+
+/* ── statistika ───────────────────────────────────────────────────── */
+/* Mřížku dělí rámečky, ne mezery vyplněné barvou pozadí. Trik s `gap: 1px`
+   nad barevným kontejnerem nechá po posledním políčku svítit prázdný pruh,
+   kdykoli počet buněk nevyjde na celý řádek. */
+.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+.stat { padding: 13px 16px; border-right: 1px solid var(--line-soft); border-bottom: 1px solid var(--line-soft); }
+.stat .k { font-size: 10.5px; text-transform: uppercase; letter-spacing: 0.06em; color: var(--ink-faint); white-space: nowrap; }
+.stat .v { font-family: var(--mono); font-size: 17px; margin-top: 3px; font-variant-numeric: tabular-nums; }
+
+footer { color: var(--ink-faint); font-size: 12px; margin-top: 26px; line-height: 1.65; }
+footer code { font-family: var(--mono); color: var(--ink-dim); }
+.error { color: var(--down); font-family: var(--mono); }
+.empty { color: var(--ink-faint); padding: 22px 16px; text-align: center; font-family: var(--mono); font-size: 12.5px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <h1>Paper účet <span class="sub" id="strategie">…</span></h1>
+    <div class="meta">
+      <span id="bar">—</span>
+      <span><span class="dot" id="dot"></span><span id="stav">načítám</span></span>
+    </div>
+  </header>
+
+  <div id="chyba"></div>
+  <div class="tiles" id="karty"></div>
+  <div id="varovani"></div>
+
+  <section>
+    <div class="head">
+      <h2>Realizovaný kapitál</h2>
+      <span class="hint">jen uzavřené obchody — otevřené pozice se projeví až při zavření</span>
+    </div>
+    <div class="body" style="padding:8px 8px 4px"><svg class="chart" id="graf"></svg></div>
+  </section>
+
+  <section>
+    <div class="head">
+      <h2>Otevřené pozice</h2>
+      <span class="hint">oceněno posledním barem, ne živým trhem</span>
+    </div>
+    <div id="pozice"></div>
+  </section>
+
+  <section>
+    <div class="head"><h2>Statistika uzavřených obchodů</h2></div>
+    <div class="stats" id="statistika"></div>
+  </section>
+
+  <section>
+    <div class="head">
+      <h2>Poslední obchody</h2>
+      <span class="hint" id="pocet-obchodu"></span>
+    </div>
+    <div id="obchody"></div>
+  </section>
+
+  <footer>
+    Fiktivní peníze. Přehled je jen ke čtení — účet posouvá výhradně
+    <code>trading paper</code>, dashboard do stavu nikdy nezapisuje.<br>
+    Stránka se sama obnoví, když se změní stav účtu nebo <code>trading/ui/index.html</code>.
+  </footer>
+
+</div>
+
+<script>
+"use strict";
+
+// ── formátování ────────────────────────────────────────────────────────
+// Peníze zaokrouhlené na celé, procenta na desetinu. Víc míst budí dojem
+// přesnosti, kterou paper účet na 465 obchodech nemá.
+const czk = new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 0 });
+const dec = (n, d = 2) => new Intl.NumberFormat("cs-CZ", { minimumFractionDigits: d, maximumFractionDigits: d }).format(n);
+
+const money = n => czk.format(n);
+const pct   = n => (n >= 0 ? "+" : "") + dec(n, 1) + " %";
+const sign  = n => (n >= 0 ? "up" : "down");
+const day   = s => (s ? s.slice(0, 10) : "—");
+const esc   = s => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+const $ = id => document.getElementById(id);
+
+// ── vykreslení ─────────────────────────────────────────────────────────
+function karty(u) {
+  const zisk = u.equity - u.initial_capital;
+  $("karty").innerHTML = `
+    <div class="tile hero">
+      <div class="label">Hodnota účtu</div>
+      <div class="value">${money(u.equity)}<span class="faint" style="font-size:15px"> USD</span></div>
+      <div class="note ${sign(zisk)}">${zisk >= 0 ? "+" : ""}${money(zisk)} &nbsp;·&nbsp; ${pct(u.total_return_pct)} od startu</div>
+    </div>
+    <div class="tile">
+      <div class="label">Propad od maxima</div>
+      <div class="value ${u.drawdown_pct > 15 ? "down" : u.drawdown_pct > 8 ? "warn" : ""}">${dec(u.drawdown_pct, 1)} %</div>
+      <div class="note">vrchol ${money(u.peak_equity)}</div>
+    </div>
+    <div class="tile">
+      <div class="label">V pozicích</div>
+      <div class="value">${money(u.invested)}</div>
+      <div class="note">${u.open_positions} pozic · hotovost ${money(u.cash)}</div>
+    </div>
+    <div class="tile">
+      <div class="label">Poplatky celkem</div>
+      <div class="value">${money(u.total_fees)}</div>
+      <div class="note">${u.pending_orders} čekajících příkazů</div>
+    </div>
+    <div class="tile">
+      <div class="label">Zamítnuté signály</div>
+      <div class="value">${czk.format(u.rejected_signals)}</div>
+      <div class="note">limity risk manageru</div>
+    </div>`;
+}
+
+function varovani(list) {
+  $("varovani").innerHTML = list.length
+    ? `<section class="warnings"><div class="head"><h2>Za povšimnutí</h2></div>
+       <div class="body"><ul>${list.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div></section>`
+    : "";
+}
+
+// Graf kreslíme ručně do SVG. Knihovna by kvůli jedné čáře znamenala
+// buď CDN (které lokální server nemá), nebo vendorovaný balík v repu.
+function graf(points) {
+  const svg = $("graf");
+  const body = points.filter(p => p.date);
+  if (body.length < 2) { svg.innerHTML = ""; return; }
+
+  const W = svg.clientWidth || 900, H = 220, L = 58, R = 12, T = 14, B = 22;
+  const ys = body.map(p => p.equity);
+  const base = points[0].equity;
+  let lo = Math.min(...ys, base), hi = Math.max(...ys, base);
+  const pad = (hi - lo) * 0.08 || 1;
+  lo -= pad; hi += pad;
+
+  const x = i => L + (i / (body.length - 1)) * (W - L - R);
+  const y = v => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+
+  const line = body.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.equity).toFixed(1)}`).join("");
+  const area = `${line}L${x(body.length - 1).toFixed(1)},${y(lo).toFixed(1)}L${x(0).toFixed(1)},${y(lo).toFixed(1)}Z`;
+
+  const ticks = 4, grid = [];
+  for (let i = 0; i <= ticks; i++) {
+    const v = lo + (hi - lo) * (i / ticks), yy = y(v).toFixed(1);
+    grid.push(`<line class="grid" x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}"/>
+               <text x="${L - 8}" y="${+yy + 3}" text-anchor="end">${money(v)}</text>`);
+  }
+  const labels = [0, Math.floor(body.length / 2), body.length - 1]
+    .map(i => `<text x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="${i === 0 ? "start" : i === body.length - 1 ? "end" : "middle"}">${day(body[i].date)}</text>`);
+
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = `
+    <defs><linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="var(--accent)" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="var(--accent)" stop-opacity="0"/>
+    </linearGradient></defs>
+    ${grid.join("")}
+    <line class="base" x1="${L}" x2="${W - R}" y1="${y(base).toFixed(1)}" y2="${y(base).toFixed(1)}"/>
+    <path class="fill" d="${area}"/><path class="curve" d="${line}"/>
+    ${labels.join("")}`;
+}
+
+function pozice(rows) {
+  if (!rows.length) { $("pozice").innerHTML = `<div class="empty">žádné otevřené pozice</div>`; return; }
+  $("pozice").innerHTML = `<div class="scroll"><table>
+    <thead><tr>
+      <th>Symbol</th><th>Kusů</th><th>Vstup</th><th>Cena</th><th>Hodnota</th>
+      <th>Zisk</th><th>%</th><th>Stop</th><th>Ke stopu</th><th>Drženo</th>
+    </tr></thead><tbody>${rows.map(p => {
+      const d = p.stop_distance_pct;
+      const cls = d === null ? "" : d < 2 ? "hot" : d < 6 ? "near" : "";
+      const bar = d === null ? "" :
+        `<span class="gauge"><i class="${cls}" style="width:${Math.max(2, Math.min(100, d * 5))}%"></i></span>`;
+      return `<tr>
+        <td class="sym">${esc(p.symbol)}</td>
+        <td>${dec(p.quantity, 3)}</td>
+        <td class="dim">${dec(p.entry_price)}</td>
+        <td>${dec(p.price)}</td>
+        <td>${money(p.value)}</td>
+        <td class="${sign(p.pnl)}">${p.pnl >= 0 ? "+" : ""}${money(p.pnl)}</td>
+        <td class="${sign(p.pnl_pct)}">${pct(p.pnl_pct)}</td>
+        <td class="dim">${p.stop_loss === null ? "—" : dec(p.stop_loss)}</td>
+        <td>${d === null ? "—" : dec(d, 1) + " %"}${bar}</td>
+        <td class="faint">${p.days_held === null ? "—" : Math.round(p.days_held) + " d"}</td>
+      </tr>`;
+    }).join("")}</tbody></table></div>`;
+}
+
+function statistika(s) {
+  if (!s.count) { $("statistika").innerHTML = `<div class="empty">zatím žádný uzavřený obchod</div>`; return; }
+  const cell = (k, v, cls = "") => `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`;
+  $("statistika").innerHTML = [
+    cell("Obchodů", s.count),
+    cell("Úspěšnost", dec(s.win_rate, 1) + " %"),
+    // Na malém účtu jsou tahle čísla v jednotkách dolarů. Zaokrouhlit je na
+    // celé jako hodnotu účtu by z rozdílu mezi +7,20 a +7,80 udělalo totéž.
+    cell("Průměrný zisk", "+" + dec(s.avg_win), "up"),
+    cell("Průměrná ztráta", dec(s.avg_loss), "down"),
+    // Bez ztrátového obchodu profit factor neexistuje. "∞" by se četlo
+    // jako kvalita strategie, ne jako málo dat.
+    cell("Profit factor", s.profit_factor === null ? "—" : dec(s.profit_factor)),
+    // Očekávaná hodnota: průměr přes všechny obchody, výhry i ztráty. Tohle
+    // je číslo, které se násobí počtem obchodů — ne úspěšnost.
+    cell("Zisk na obchod", (s.expectancy >= 0 ? "+" : "") + dec(s.expectancy), sign(s.expectancy)),
+    cell("Nejlepší", "+" + dec(s.best), "up"),
+    cell("Nejhorší", dec(s.worst), "down"),
+    cell("Průměrně drženo", s.avg_days_held === null ? "—" : Math.round(s.avg_days_held) + " d"),
+  ].join("");
+}
+
+function obchody(rows) {
+  $("pocet-obchodu").textContent = `${rows.length} celkem, zobrazeno posledních 40`;
+  if (!rows.length) { $("obchody").innerHTML = `<div class="empty">zatím žádný uzavřený obchod</div>`; return; }
+  $("obchody").innerHTML = `<div class="scroll"><table>
+    <thead><tr>
+      <th>Symbol</th><th>Vstup</th><th>Výstup</th><th>Za</th><th>Na</th>
+      <th>Zisk</th><th>%</th><th>Dní</th><th>Důvod</th>
+    </tr></thead><tbody>${rows.slice(0, 40).map(t => `<tr>
+      <td class="sym">${esc(t.symbol)}</td>
+      <td class="dim">${day(t.entry_time)}</td>
+      <td class="dim">${day(t.exit_time)}</td>
+      <td class="dim">${dec(t.entry_price)}</td>
+      <td>${dec(t.exit_price)}</td>
+      <td class="${sign(t.pnl)}">${t.pnl >= 0 ? "+" : ""}${dec(t.pnl)}</td>
+      <td class="${sign(t.return_pct)}">${pct(t.return_pct)}</td>
+      <td class="faint">${t.days_held === null ? "—" : Math.round(t.days_held)}</td>
+      <td style="text-align:left"><span class="tag ${t.exit_reason === "stop-loss" ? "stop" : "signal"}">${esc(t.exit_reason || "—")}</span></td>
+    </tr>`).join("")}</tbody></table></div>`;
+}
+
+// ── načítání a automatické obnovení ────────────────────────────────────
+let posledniStav = null, posledniUi = null, data = null;
+
+async function nacti() {
+  const res = await fetch("/api/prehled", { cache: "no-store" });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.chyba || res.statusText);
+  data = json;
+
+  $("strategie").textContent = json.ucet.strategy || "";
+  $("bar").textContent = "poslední bar " + day(json.ucet.last_bar);
+  $("chyba").innerHTML = "";
+  karty(json.ucet);
+  varovani(json.upozorneni);
+  graf(json.krivka);
+  pozice(json.pozice);
+  statistika(json.statistika);
+  obchody(json.obchody);
+}
+
+function stav(text, stale) {
+  $("stav").textContent = text;
+  $("dot").className = stale ? "dot stale" : "dot";
+}
+
+// Ptáme se po otiscích souborů, ne po datech. Když se změní šablona,
+// stránka se přenačte celá — díky tomu je editace index.html z editoru
+// vidět v prohlížeči bez jediného kliknutí.
+async function hlidej() {
+  try {
+    const v = await (await fetch("/api/verze", { cache: "no-store" })).json();
+    if (posledniUi !== null && v.ui !== posledniUi) { location.reload(); return; }
+    posledniUi = v.ui;
+    if (v.stav !== posledniStav) { posledniStav = v.stav; await nacti(); stav("aktuální", false); }
+  } catch (e) {
+    stav("server neběží", true);
+  }
+}
+
+(async () => {
+  try { await nacti(); stav("aktuální", false); }
+  catch (e) {
+    stav("chyba", true);
+    $("chyba").innerHTML = `<section class="warnings"><div class="body error">${esc(e.message)}</div></section>`;
+  }
+  setInterval(hlidej, 1500);
+  addEventListener("resize", () => { if (data) graf(data.krivka); });
+})();
+</script>
+</body>
+</html>
