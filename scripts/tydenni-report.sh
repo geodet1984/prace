@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Týdenní report paper účtu pro malý kapitál (~500 USD / 10 000 Kč).
+# Týdenní report paper účtu pro malý kapitál (~1000 USD / 20 000 Kč).
 #
 # Spouští se jednou týdně, ale zpracuje všechny bary, které od minule přibyly.
 # Engine přehrává bar po baru, takže výsledek je **bit po bitu stejný**, jako
@@ -30,8 +30,12 @@
 #   Trading 212 nebo Alpaca. S IBKR by minimum 1 $ za příkaz sežralo
 #   ~20 % kapitálu ročně — na téhle velikosti účtu se nedá použít.
 #
-# Zlomkové akcie jsou nutnost: bez nich se za 100 USD nedá koupit ani jedna
+# Zlomkové akcie jsou nutnost: bez nich se za 200 USD nedá koupit ani jedna
 #   akcie SPY a celá diverzifikace padá.
+#
+# Kill-switch na 35 %, ne na 25 %. V paper fázi je smyslem se učit, ne chránit
+#   kapitál — a přísný kill-switch systém utne dřív, než stihne ukázat, jak se
+#   chová v propadu. Na ostrý účet ho stáhněte zpátky.
 # ────────────────────────────────────────────────────────────────────────
 
 set -euo pipefail
@@ -42,7 +46,7 @@ cd "$(dirname "$0")/.."
 # a ten důvod ověřte přes `python -m trading ensemble`, ne odhadem.
 SYMBOLS="${SYMBOLS:-SPY,EFA,EEM,TLT,GLD,DBC,VNQ}"
 
-CAPITAL="${CAPITAL:-500}"
+CAPITAL="${CAPITAL:-1000}"
 START="${START:-2010-01-01}"     # dost historie na 252denní momentum + rozehřátí
 STATE="${STATE:-data/paper_state.json}"
 
@@ -62,7 +66,7 @@ python3 -m trading paper \
     --stop-atr 3.0 \
     --max-position 0.20 \
     --max-positions 6 \
-    --max-drawdown 0.25 \
+    --max-drawdown 0.35 \
     --reentry-cooldown 10
 
 echo
