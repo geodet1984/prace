@@ -16,10 +16,12 @@
 # ────────────────────────────────────────────────────────────────────────
 # PROČ TAKHLE
 #
-# Tituly: sedm ETF napříč třídami aktiv, ne sedm amerických akcií. Diverzifikace
+# Tituly: čtrnáct ETF napříč třídami aktiv, ne čtrnáct amerických akcií. Diverzifikace
 #   funguje jen mezi věcmi, které spolu nekorelují. SPY a QQQ mají korelaci
 #   kolem 0,9 — to je jedna sázka dvakrát. Dluhopisy, zlato a komodity se
 #   v krizi chovají jinak než akcie, a právě to dělá ten √N efekt.
+#   POZOR: US ETF v EU jako retail nekoupíte (PRIIPs). Pro demo to nevadí,
+#   pro ostrý účet viz tabulku UCITS alternativ v UNIVERZUM.md.
 #
 # Strategie: tsmom (12měsíční momentum). Nejlépe doložený jednoduchý signál —
 #   Moskowitz, Ooi a Pedersen ho ověřili na 58 futures napříč třídami aktiv.
@@ -42,9 +44,10 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 
-# Sedm tříd aktiv. Nechte tak, dokud nebudete mít důvod to změnit —
-# a ten důvod ověřte přes `python -m trading ensemble`, ne odhadem.
-SYMBOLS="${SYMBOLS:-SPY,EFA,EEM,TLT,GLD,DBC,VNQ}"
+# Čtrnáct titulů napříč třídami aktiv. Podrobnosti a UCITS alternativy pro
+# ostrý účet v EU jsou v UNIVERZUM.md. Po každé změně ověřte přes
+# `python -m trading ensemble`, jestli přibyly sázky, nebo jen kopie.
+SYMBOLS="${SYMBOLS:-SPY,IWM,EFA,EEM,TLT,IEF,LQD,HYG,TIP,GLD,SLV,DBC,VNQ,UUP}"
 
 CAPITAL="${CAPITAL:-1000}"
 START="${START:-2010-01-01}"     # dost historie na 252denní momentum + rozehřátí
@@ -64,8 +67,8 @@ python3 -m trading paper \
     --fractional \
     --risk-per-trade 0.015 \
     --stop-atr 3.0 \
-    --max-position 0.20 \
-    --max-positions 6 \
+    --max-position 0.12 \
+    --max-positions 10 \
     --max-drawdown 0.35 \
     --reentry-cooldown 10
 

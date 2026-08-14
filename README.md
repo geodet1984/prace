@@ -149,12 +149,28 @@ Strategie neprošla. Výsledek se nedá odlišit od šťastného hledání.
 
 ## Instalace
 
+**Na jedno spuštění (macOS i Linux):**
+
 ```bash
-pip install -r requirements.txt      # pandas, numpy, yfinance
+git clone https://github.com/geodet1984/prace.git
+cd prace
+git checkout claude/stock-trading-app-3vvbh8
+./scripts/start-demo.sh
+```
+
+Skript sám založí virtuální prostředí, doinstaluje závislosti, stáhne data,
+ukáže dnešní signály a rozjede paper účet.
+
+**Ručně:**
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
 pip install -e ".[dev]"              # + pytest, ruff
 ```
 
-Python 3.10+. Jádro potřebuje jen pandas a numpy; `scipy` schválně ne —
+Python 3.10+. Na macOS je virtuální prostředí nutnost, ne doporučení —
+Homebrew i systémový Python odmítají globální instalaci balíčků (PEP 668). Jádro potřebuje jen pandas a numpy; `scipy` schválně ne —
 hierarchické shlukování pro HRP i normální rozdělení pro PSR jsou napsané
 proti standardní knihovně.
 
@@ -174,9 +190,15 @@ Nápověda: `python -m trading <příkaz> --help`.
 
 ## Provoz na malém účtu
 
-Pro kapitál kolem 500 USD / 10 000 Kč je připravený `scripts/tydenni-report.sh`:
-sedm ETF napříč třídami aktiv, `tsmom`, nulová provize, zlomkové akcie.
-V hlavičce skriptu je zdůvodnění každé volby.
+Pro kapitál kolem 1 000 USD / 20 000 Kč je připravený `scripts/tydenni-report.sh`:
+čtrnáct ETF napříč třídami aktiv, `tsmom`, nulová provize, zlomkové akcie.
+V hlavičce skriptu je zdůvodnění každé volby, výběr titulů rozebírá
+[UNIVERZUM.md](UNIVERZUM.md).
+
+⚠️ **US ETF v EU jako retail nekoupíte.** Regulace PRIIPs to od roku 2018
+zakazuje všem evropským brokerům. Pro demo to nevadí — nic se doopravdy
+nekupuje a US data jsou nejčistší. Na ostrý účet potřebujete UCITS verze;
+tabulka je v UNIVERZUM.md.
 
 ```bash
 chmod +x scripts/tydenni-report.sh
