@@ -28,13 +28,17 @@ else
     exit 1
 fi
 
-URL="http://127.0.0.1:${PORT}"
+# Do prohlížeče jde "localhost", ne "127.0.0.1": Safari s vynuceným HTTPS
+# (mj. anonymní okna) číselnou loopback adresu po HTTP zablokuje, zatímco
+# localhost má výjimku. Server sám dál poslouchá na 127.0.0.1.
+URL="http://localhost:${PORT}"
+CHECK="http://127.0.0.1:${PORT}"
 
 # Prohlížeč otevřeme až ve chvíli, kdy server odpovídá. Otevřít ho dřív
 # znamená prázdnou stránku a ruční F5.
 (
     for _ in $(seq 1 40); do
-        if curl -sf -o /dev/null "$URL/api/verze" 2>/dev/null; then
+        if curl -sf -o /dev/null "$CHECK/api/verze" 2>/dev/null; then
             case "$(uname -s)" in
                 Darwin) open "$URL" ;;
                 Linux)  command -v xdg-open >/dev/null && xdg-open "$URL" >/dev/null 2>&1 ;;

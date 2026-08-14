@@ -356,7 +356,10 @@ def serve(state_path: str | Path, host: str = "127.0.0.1", port: int = 8765) -> 
     """Spustí přehled a běží, dokud ho někdo nepřeruší."""
     httpd = make_server(state_path, host, port)
     actual_port = httpd.server_address[1]
-    print(f"\n  Přehled běží na http://{host}:{actual_port}")
+    # Vypisujeme "localhost", ne číselnou adresu: Safari s vynuceným HTTPS
+    # (mj. anonymní okna) http://127.0.0.1 zablokuje, localhost má výjimku.
+    display_host = "localhost" if host == "127.0.0.1" else host
+    print(f"\n  Přehled běží na http://{display_host}:{actual_port}")
     print(f"  Stav účtu:  {state_path}")
     print("  Jen ke čtení — účet posouvá výhradně `trading paper`.")
     print("  Konec: Ctrl+C\n")
