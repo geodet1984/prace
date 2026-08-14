@@ -7,7 +7,7 @@ import pytest
 from trading import data as data_module
 from trading import strategies
 from trading.backtest import BacktestConfig, BacktestEngine
-from trading.execution import ZERO_COST
+from trading.execution import ZERO_COST, CostModel
 from trading.live import PaperTrader, make_config
 from trading.risk import RiskConfig
 
@@ -117,6 +117,161 @@ def test_status_renders(tmp_path, history):
     assert "PAPER ÚČET" in text and "Equity" in text
 
 
+# --- akumulovaný stav musí přežít restart -------------------------------
+
+
+def _multi_asset(days=1200):
+    return {
+        s: data_module.synthetic(s, days=days, seed=i + 4)
+        for i, s in enumerate(["AAA", "BBB", "CCC", "DDD"])
+    }
+
+
+def _stepped(tmp_path, name, step_bars, config_factory, days=1200, start=300):
+    """Prožene paper účet historií po ``step_bars`` barech, s restartem mezi kroky."""
+    universe = _multi_asset(days)
+    path = tmp_path / f"{name}.json"
+    trader = PaperTrader(strategies.create("tsmom"), config_factory(), path)
+    n = start
+    while n <= days:
+        trader.step({s: df.iloc[:n] for s, df in universe.items()})
+        trader.save()
+        trader = PaperTrader(strategies.create("tsmom"), config_factory(), path)
+        n += step_bars
+    return trader
+
+
+def _cooldown_config():
+    return make_config(
+        500.0,
+        CostModel(commission_pct=0.001, slippage_bps=5),
+        RiskConfig(
+            risk_per_trade=0.015,
+            stop_loss_atr_mult=3.0,
+            max_position_pct=0.20,
+            max_open_positions=6,
+            max_daily_loss_pct=None,
+            max_drawdown_pct=None,
+            min_position_value=20.0,
+            allow_fractional=True,
+            reentry_cooldown_bars=10,
+        ),
+    )
+
+
+def _trade_keys(trader):
+    return [
+        (t.symbol, t.entry_time, t.exit_time, round(t.quantity, 6))
+        for t in trader.engine.portfolio.trades
+    ]
+
+
+def test_result_does_not_depend_on_how_often_you_run_it(tmp_path):
+    """Týdenní spouštění musí dát přesně totéž co denní.
+
+    Engine přehrává bar po baru, takže na wall-clock nezáleží — ale jen
+    dokud se ukládá **všechen** nasčítaný stav. Než se do stavu doplnil
+    ``bar_index`` a ``cooldown_until``, pauza po stop-lossu se při každém
+    restartu vynulovala a denní běh dal jiné obchody než týdenní.
+    """
+    daily = _stepped(tmp_path, "daily", 1, _cooldown_config)
+    weekly = _stepped(tmp_path, "weekly", 5, _cooldown_config)
+    monthly = _stepped(tmp_path, "monthly", 20, _cooldown_config)
+
+    assert _trade_keys(daily) == _trade_keys(weekly)
+    assert _trade_keys(daily) == _trade_keys(monthly)
+    assert daily.engine.portfolio.cash == pytest.approx(weekly.engine.portfolio.cash)
+
+
+def test_cooldown_state_survives_restart(tmp_path, history):
+    trader = PaperTrader(
+        strategies.create("sma_crossover"), _cooldown_config(), tmp_path / "c.json"
+    )
+    trader.step({"X": history})
+    trader.engine._cooldown_until = {"X": 12345}
+    trader.engine._bar_index = 999
+    trader.save()
+
+    restored = PaperTrader(
+        strategies.create("sma_crossover"), _cooldown_config(), tmp_path / "c.json"
+    )
+    assert restored.engine._cooldown_until == {"X": 12345}
+    assert restored.engine._bar_index == 999
+
+
+def test_entry_fees_survive_restart(tmp_path):
+    """Každý uzavřený obchod musí vykázat poplatky obou nohou.
+
+    Vstupní poplatek se dřív dohledával v seznamu plnění, který se ze stavu
+    neobnovuje. Pozice otevřená před restartem a zavřená po něm pak vykázala
+    jen výstupní poplatek — tedy zhruba poloviční náklady.
+    """
+    universe = _multi_asset(1200)
+    costs = CostModel(commission_pct=0.002, slippage_bps=0)
+    path = tmp_path / "f.json"
+
+    def config_factory():
+        return make_config(
+            5_000.0,
+            costs,
+            RiskConfig(
+                max_daily_loss_pct=None,
+                max_drawdown_pct=None,
+                allow_fractional=True,
+                max_position_pct=0.25,
+            ),
+        )
+
+    trader = PaperTrader(strategies.create("tsmom"), config_factory(), path)
+    n = 300
+    while n <= 1200:
+        trader.step({s: df.iloc[:n] for s, df in universe.items()})
+        trader.save()
+        trader = PaperTrader(strategies.create("tsmom"), config_factory(), path)
+        n += 50
+
+    trades = trader.engine.portfolio.trades
+    assert len(trades) >= 5, "test potřebuje dost uzavřených obchodů"
+    for trade in trades:
+        both_legs = (trade.entry_price + trade.exit_price) * trade.quantity * 0.002
+        assert trade.fees == pytest.approx(both_legs, rel=1e-6)
+
+
+def test_vol_targeter_state_survives_restart(tmp_path, history):
+    from trading.sizing import VolTargetConfig
+
+    config = make_config(100_000.0, ZERO_COST, RiskConfig(max_daily_loss_pct=None))
+    config.vol_target = VolTargetConfig(target_annual_vol=0.10)
+    path = tmp_path / "v.json"
+
+    trader = PaperTrader(strategies.create("sma_crossover"), config, path)
+    trader.step({"X": history})
+    trader.save()
+    before = trader.engine._vol_targeter
+
+    restored = PaperTrader(strategies.create("sma_crossover"), config, path)
+    assert restored.engine._vol_targeter._count == before._count
+    assert restored.engine._vol_targeter._scalar == pytest.approx(before._scalar)
+    assert restored.engine._vol_targeter._variance == pytest.approx(before._variance)
+
+
+def test_kelly_state_survives_restart(tmp_path, history):
+    from trading.sizing import KellyConfig
+
+    config = make_config(100_000.0, ZERO_COST, RiskConfig(max_daily_loss_pct=None))
+    config.kelly = KellyConfig(fraction=0.25, min_trades=5)
+    path = tmp_path / "k.json"
+
+    trader = PaperTrader(strategies.create("sma_crossover"), config, path)
+    trader.step({"X": history})
+    trader.save()
+    before = trader.engine._kelly.trade_count
+    assert before > 0, "test potřebuje aspoň jeden zaznamenaný obchod"
+
+    restored = PaperTrader(strategies.create("sma_crossover"), config, path)
+    assert restored.engine._kelly.trade_count == before
+
+
 def test_saved_file_is_valid_json(tmp_path, history):
     path = tmp_path / "s.json"
     trader = PaperTrader(strategies.create("sma_crossover"), config(), path)
@@ -124,6 +279,6 @@ def test_saved_file_is_valid_json(tmp_path, history):
     trader.save()
 
     payload = json.loads(path.read_text(encoding="utf-8"))
-    assert payload["version"] == 1
+    assert payload["version"] == 2
     assert "trades" in payload and "positions" in payload
     assert not (tmp_path / "s.tmp").exists(), "dočasný soubor se má přejmenovat, ne zůstat"

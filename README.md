@@ -172,6 +172,31 @@ proti standardní knihovně.
 
 Nápověda: `python -m trading <příkaz> --help`.
 
+## Provoz na malém účtu
+
+Pro kapitál kolem 500 USD / 10 000 Kč je připravený `scripts/tydenni-report.sh`:
+sedm ETF napříč třídami aktiv, `tsmom`, nulová provize, zlomkové akcie.
+V hlavičce skriptu je zdůvodnění každé volby.
+
+```bash
+chmod +x scripts/tydenni-report.sh
+crontab -e
+23 23 * * 5  /cesta/k/projektu/scripts/tydenni-report.sh >> ~/paper.log 2>&1
+```
+
+Frekvence spouštění **nemění výsledek**. Engine přehrává bar po baru, takže
+týdenní běh zpracuje pět barů stejně, jako by je zpracoval pět denních běhů —
+ověřuje to `test_result_does_not_depend_on_how_often_you_run_it`. Řidší
+hlášení je proto zadarmo, a psychologicky lepší: u strategie se Sharpe 0,8
+ukáže hodinový pohled ztrátu v 49 % případů (806× ročně), týdenní v 46 %
+(24× ročně). Stejná strategie, o dva řády míň příležitostí do ní sáhnout.
+
+Nákladový strop: aby poplatky snědly nejvýš pětinu očekávaného výnosu, vychází
+maximum kolem **80 obratů ročně** — a to nezávisle na velikosti účtu, protože
+pozice i náklady škálují spolu. Všechny strategie v projektu leží pod ním
+(5–60). Intradenní obchodování se do něj nevejde ani omylem: 10 obchodů za
+hodinu je 8 190 obratů ročně, tedy 205 % kapitálu na samotném skluzu.
+
 ## Připojení brokera
 
 Vrstva `trading/brokers/` odděluje rozhodování od provádění. Strategie

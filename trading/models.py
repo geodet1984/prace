@@ -73,6 +73,13 @@ class Position:
     """Částka v sázce při otevření. Trailing stop ji později posune, ale
     Kellyho odhad potřebuje původní hodnotu, aby R-násobky seděly."""
 
+    entry_fees: float = 0.0
+    """Poplatky zaplacené při vstupu.
+
+    Drží se na pozici, ne dohledáváním v seznamu plnění: ten se po restartu
+    neobnovuje, takže by se poplatek vstupní nohy tiše ztratil a uzavřený
+    obchod by vykázal nižší náklady, než jaké skutečně byly."""
+
     def market_value(self, price: float) -> float:
         return self.quantity * price
 

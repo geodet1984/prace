@@ -95,6 +95,7 @@ class Portfolio:
             stop_loss=stop_loss,
             take_profit=take_profit,
             initial_risk=initial_risk,
+            entry_fees=fees,
         )
 
         fill = Fill(symbol, Side.BUY, quantity, price, fees, timestamp, reason)
@@ -119,17 +120,9 @@ class Portfolio:
         self.cash += proceeds
         self.total_fees += fees
 
-        # Poplatky obou nohou obchodu se přičítají k tomuto obchodu, aby
-        # net_pnl odpovídalo skutečné změně hotovosti.
-        entry_fees = next(
-            (
-                f.fees
-                for f in reversed(self.fills)
-                if f.symbol == symbol and f.side is Side.BUY
-            ),
-            0.0,
-        )
-
+        # Poplatky obou nohou se přičítají k tomuto obchodu, aby net_pnl
+        # odpovídalo skutečné změně hotovosti. Vstupní poplatek si nese
+        # pozice — hledat ho v ``self.fills`` by po restartu selhalo.
         trade = Trade(
             symbol=symbol,
             quantity=position.quantity,
@@ -137,7 +130,7 @@ class Portfolio:
             entry_price=position.entry_price,
             exit_time=timestamp,
             exit_price=price,
-            fees=entry_fees + fees,
+            fees=position.entry_fees + fees,
             exit_reason=reason,
         )
         self.trades.append(trade)

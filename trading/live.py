@@ -26,7 +26,7 @@ from .strategies import Strategy
 
 logger = logging.getLogger(__name__)
 
-STATE_VERSION = 1
+STATE_VERSION = 2
 DEFAULT_STATE_PATH = Path("data/paper_state.json")
 
 
@@ -79,6 +79,8 @@ class PaperTrader:
                 entry_time=datetime.fromisoformat(p["entry_time"]),
                 stop_loss=p.get("stop_loss"),
                 take_profit=p.get("take_profit"),
+                initial_risk=p.get("initial_risk", 0.0),
+                entry_fees=p.get("entry_fees", 0.0),
             )
             for p in raw.get("positions", [])
         }
@@ -108,6 +110,21 @@ class PaperTrader:
         }
         self.engine._last_price = raw.get("last_price", {})
         self.engine._rejected = raw.get("rejected_signals", 0)
+        self.engine._bar_index = raw.get("bar_index", 0)
+        self.engine._cooldown_until = {
+            str(k): int(v) for k, v in (raw.get("cooldown_until") or {}).items()
+        }
+        self.engine._last_equity = raw.get("last_equity")
+
+        saved_vol = raw.get("vol_target")
+        if saved_vol and self.engine._vol_targeter is not None:
+            self.engine._vol_targeter._variance = saved_vol.get("variance")
+            self.engine._vol_targeter._count = saved_vol.get("count", 0)
+            self.engine._vol_targeter._scalar = saved_vol.get("scalar", 1.0)
+
+        saved_kelly = raw.get("kelly_r_multiples")
+        if saved_kelly and self.engine._kelly is not None:
+            self.engine._kelly._r_multiples = [float(v) for v in saved_kelly]
         self.engine.risk._peak_equity = raw.get("peak_equity", portfolio.initial_capital)
         self.last_bar = pd.Timestamp(raw["last_bar"]) if raw.get("last_bar") else None
         self.created_at = raw.get("created_at", self.created_at)
@@ -135,6 +152,25 @@ class PaperTrader:
             "rejected_signals": self.engine._rejected,
             "last_bar": self.last_bar.isoformat() if self.last_bar is not None else None,
             "last_price": self.engine._last_price,
+            # Všechno, co engine nasčítal v průběhu běhu. Bez toho se to při
+            # každém spuštění vynuluje a funkce jako pauza po stop-lossu nebo
+            # cílování volatility tiše přestanou fungovat — což je horší než
+            # kdyby vůbec nebyly, protože stav vypadá v pořádku.
+            "bar_index": self.engine._bar_index,
+            "cooldown_until": self.engine._cooldown_until,
+            "last_equity": self.engine._last_equity,
+            "vol_target": (
+                {
+                    "variance": self.engine._vol_targeter._variance,
+                    "count": self.engine._vol_targeter._count,
+                    "scalar": self.engine._vol_targeter._scalar,
+                }
+                if self.engine._vol_targeter is not None
+                else None
+            ),
+            "kelly_r_multiples": (
+                self.engine._kelly._r_multiples if self.engine._kelly is not None else None
+            ),
             "positions": [
                 {
                     "symbol": p.symbol,
@@ -143,6 +179,8 @@ class PaperTrader:
                     "entry_time": p.entry_time.isoformat(),
                     "stop_loss": p.stop_loss,
                     "take_profit": p.take_profit,
+                    "initial_risk": p.initial_risk,
+                    "entry_fees": p.entry_fees,
                 }
                 for p in portfolio.positions.values()
             ],
