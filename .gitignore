@@ -14,3 +14,7 @@ data/*.json
 data/*.tmp
 *.csv
 !tests/**/*.csv
+# Kalendář událostí je ručně opsaný ze zdrojů, žádný build ho neobnoví —
+# na rozdíl od cache s tržními daty do repozitáře patří.
+!data/udalosti.csv
+!data/udalosti-vzor.csv
