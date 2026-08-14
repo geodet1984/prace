@@ -57,9 +57,28 @@ RETAIL_EU = CostModel(commission_pct=0.0015, min_commission=2.0, slippage_bps=10
 """Přibližný model evropského retailového brokera."""
 
 
+BINANCE_SPOT = CostModel(commission_pct=0.001, slippage_bps=10.0)
+"""Binance spot, základní tarif: 0,10 % taker. Se slevou za BNB méně."""
+
+
+KRAKEN_PRO = CostModel(commission_pct=0.0026, slippage_bps=10.0)
+"""Kraken, základní tarif: 0,26 % taker. Kraken Pro stlačí na 0,10 %."""
+
+
+COINBASE_ADVANCED = CostModel(commission_pct=0.006, slippage_bps=15.0)
+"""Coinbase Advanced, nejnižší objemové pásmo: 0,60 % taker.
+
+Tenhle preset je tu hlavně jako varování. Při 100 obratech ročně sežere
+18 % kapitálu — víc, než kolik má strategie šanci vydělat.
+"""
+
+
 COST_PRESETS = {
     "zero": ZERO_COST,
     "default": CostModel(),
     "ibkr": IBKR_LIKE,
     "retail_eu": RETAIL_EU,
+    "binance": BINANCE_SPOT,
+    "kraken": KRAKEN_PRO,
+    "coinbase": COINBASE_ADVANCED,
 }

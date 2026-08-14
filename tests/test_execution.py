@@ -43,6 +43,16 @@ def test_presets_are_usable(name):
     assert costs.fill_price(Side.BUY, 100.0) >= 100.0
 
 
+def test_crypto_presets_are_far_more_expensive_than_equity():
+    """Krypto burzy berou procenta, ETF brokeři nulu. Řádový rozdíl."""
+    equity = COST_PRESETS["default"].commission(1, 1000.0)
+    for name in ("binance", "kraken", "coinbase"):
+        assert COST_PRESETS[name].commission(1, 1000.0) > equity
+    assert COST_PRESETS["coinbase"].commission(1, 1000.0) > COST_PRESETS["binance"].commission(
+        1, 1000.0
+    )
+
+
 def test_default_preset_has_nonzero_slippage():
     """Výchozí model nesmí předstírat bezztrátové plnění."""
     assert COST_PRESETS["default"].slippage_bps > 0

@@ -219,6 +219,24 @@ pozice i náklady škálují spolu. Všechny strategie v projektu leží pod ní
 (5–60). Intradenní obchodování se do něj nevejde ani omylem: 10 obchodů za
 hodinu je 8 190 obratů ročně, tedy 205 % kapitálu na samotném skluzu.
 
+## Krypto a zpravodajství
+
+Engine je vůči třídě aktiv slepý, takže krypto jede beze změny kódu:
+
+```bash
+python -m trading backtest --symbols BTC-USD,ETH-USD --start 2018-01-01 \
+    --costs binance --periods-per-year 365 --fractional --min-position-value 2
+```
+
+Dvě věci se ale musí změnit, jinak jsou výsledky špatně: **rok má 365 barů**
+(jinak je Sharpe podhodnocený o faktor 1,20) a **náklady jsou řádově vyšší**
+(0,10–0,60 % za stranu proti nule u ETF). Nákladový strop spadne ze 167 obratů
+ročně na 42 u Binance a na 11 u Coinbase Advanced.
+
+Na otázku, jestli má aplikace sama sbírat zprávy a nabízet obchody:
+**jako signál ne, jako řízení rizika ano.** Podrobnosti a čísla
+v [KRYPTO.md](KRYPTO.md).
+
 ## Připojení brokera
 
 Vrstva `trading/brokers/` odděluje rozhodování od provádění. Strategie

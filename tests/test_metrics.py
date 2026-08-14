@@ -83,6 +83,36 @@ def test_sharpe_is_positive_for_steady_growth():
     assert metrics.sharpe_ratio(growing()) > 1.0
 
 
+def test_crypto_annualization_scales_sharpe():
+    """Krypto se obchoduje 365 dní v roce, ne 252.
+
+    Nechat výchozích 252 barů u krypta podhodnotí Sharpe o faktor
+    √(365/252) = 1,204.
+    """
+    equity = growing()
+    stocks = metrics.sharpe_ratio(equity)
+    crypto = metrics.sharpe_ratio(equity, periods_per_year=365)
+    assert crypto / stocks == pytest.approx(np.sqrt(365 / 252), rel=1e-9)
+
+
+def test_analyze_uses_the_given_calendar():
+    """Kalendář škáluje Sharpe i volatilitu o √(365/252), ať je Sharpe kladný, či ne.
+
+    Testuje se poměr, ne nerovnost: u záporného Sharpe ho stejné škálování
+    posune dolů, takže `crypto > stocks` by neplatilo.
+    """
+    rng = np.random.default_rng(1)
+    equity = list(100_000 * np.cumprod(1 + rng.normal(0.0005, 0.01, 400)))
+    result = BacktestResult("t", ["BTC-USD"], 100_000.0, [trade(100)], curve(equity))
+
+    stocks = metrics.analyze(result, periods_per_year=252)
+    crypto = metrics.analyze(result, periods_per_year=365)
+    ratio = np.sqrt(365 / 252)
+
+    assert crypto.sharpe / stocks.sharpe == pytest.approx(ratio, rel=1e-9)
+    assert crypto.volatility_pct / stocks.volatility_pct == pytest.approx(ratio, rel=1e-9)
+
+
 def test_risk_free_rate_lowers_sharpe():
     equity = growing()
     assert metrics.sharpe_ratio(equity, 0.05) < metrics.sharpe_ratio(equity, 0.0)

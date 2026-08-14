@@ -41,6 +41,13 @@ class BacktestConfig:
     risk: RiskConfig = field(default_factory=RiskConfig)
     atr_window: int = 14
     risk_free_rate: float = 0.0
+
+    periods_per_year: int = 252
+    """Kolik barů má rok. 252 pro akcie, 365 pro krypto (obchoduje se i o víkendu).
+
+    Ovlivňuje jen anualizaci metrik, ne samotné obchodování. Nechat 252
+    u krypta znamená podhodnotit Sharpe o faktor 1,20.
+    """
     close_at_end: bool = True
     """Uzavřít otevřené pozice na posledním baru, ať ztráta nezůstane schovaná."""
 

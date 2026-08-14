@@ -108,6 +108,7 @@ def _config_from_args(args, close_at_end: bool = True) -> BacktestConfig:
         close_at_end=close_at_end,
         vol_target=vol_target,
         kelly=kelly,
+        periods_per_year=args.periods_per_year,
     )
 
 
@@ -199,7 +200,9 @@ def cmd_backtest(args) -> int:
     strategy = strategies.create(args.strategy, **_parse_params(args.param))
     engine = BacktestEngine(strategy, _config_from_args(args))
     result = engine.run(data)
-    report = analyze(result, args.risk_free_rate, engine.portfolio.total_fees)
+    report = analyze(
+        result, args.risk_free_rate, engine.portfolio.total_fees, args.periods_per_year
+    )
 
     if args.json:
         print(json.dumps(report.to_dict(), indent=2, ensure_ascii=False, default=str))
@@ -225,10 +228,14 @@ def cmd_compare(args) -> int:
         except ValueError as exc:
             logger.warning("%s: přeskakuji — %s", name, exc)
             continue
-        rows.append(analyze(result, args.risk_free_rate, engine.portfolio.total_fees))
+        rows.append(
+            analyze(
+                result, args.risk_free_rate, engine.portfolio.total_fees, args.periods_per_year
+            )
+        )
 
     bench_result, bench_fees = buy_and_hold(data, args.capital, COST_PRESETS[args.costs])
-    rows.append(analyze(bench_result, args.risk_free_rate, bench_fees))
+    rows.append(analyze(bench_result, args.risk_free_rate, bench_fees, args.periods_per_year))
 
     if args.json:
         print(json.dumps([r.to_dict() for r in rows], indent=2, ensure_ascii=False, default=str))
@@ -394,7 +401,7 @@ def cmd_ensemble(args) -> int:
 
     print(f"\nSMĚS {len(returns.columns)} STRATEGIÍ — vážení: {args.scheme}")
     print("─" * 62)
-    blended, report = ensemble_module.blend(returns, args.scheme)
+    blended, report = ensemble_module.blend(returns, args.scheme, args.periods_per_year)
     print(report.format())
 
     print("\n  Korelační matice:")
@@ -458,6 +465,12 @@ def build_parser() -> argparse.ArgumentParser:
             "--costs", choices=sorted(COST_PRESETS), default="default", help="model poplatků"
         )
         p.add_argument("--risk-free-rate", type=float, default=0.0, help="roční bezriziková sazba")
+        p.add_argument(
+            "--periods-per-year",
+            type=int,
+            default=252,
+            help="barů v roce pro anualizaci metrik: 252 akcie, 365 krypto",
+        )
         p.add_argument(
             "--risk-per-trade", type=float, default=0.01, help="riziko na obchod (0.01 = 1 %%)"
         )

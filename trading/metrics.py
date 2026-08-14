@@ -16,6 +16,14 @@ import pandas as pd
 from .models import BacktestResult, EquityPoint, Trade
 
 TRADING_DAYS = 252
+"""Obchodních dní v roce na akciovém trhu.
+
+Krypto se obchoduje 365 dní v roce, takže tam je tahle konstanta špatně
+a Sharpe by vyšel podhodnocený o faktor √(365/252) = 1,20. Proto všechny
+funkce berou ``periods_per_year`` jako parametr.
+"""
+
+CRYPTO_DAYS = 365
 
 MIN_STD = 1e-12
 """Mez, pod kterou je řada považovaná za konstantní — viz ``stats.MIN_STD``."""
@@ -138,31 +146,35 @@ def max_drawdown(equity: pd.Series) -> tuple[float, int]:
     return max_dd, longest
 
 
-def sharpe_ratio(equity: pd.Series, risk_free_rate: float = 0.0) -> float:
+def sharpe_ratio(
+    equity: pd.Series, risk_free_rate: float = 0.0, periods_per_year: int = TRADING_DAYS
+) -> float:
     """Anualizovaný Sharpe. rf je roční bezriziková sazba (0.04 = 4 %)."""
     rets = equity.pct_change().dropna()
     if len(rets) < 2:
         return 0.0
-    excess = rets - risk_free_rate / TRADING_DAYS
+    excess = rets - risk_free_rate / periods_per_year
     std = excess.std(ddof=1)
     if math.isnan(std) or std < MIN_STD:
         return 0.0
-    return float(excess.mean() / std * math.sqrt(TRADING_DAYS))
+    return float(excess.mean() / std * math.sqrt(periods_per_year))
 
 
-def sortino_ratio(equity: pd.Series, risk_free_rate: float = 0.0) -> float:
+def sortino_ratio(
+    equity: pd.Series, risk_free_rate: float = 0.0, periods_per_year: int = TRADING_DAYS
+) -> float:
     """Jako Sharpe, ale trestá jen záporné odchylky."""
     rets = equity.pct_change().dropna()
     if len(rets) < 2:
         return 0.0
-    excess = rets - risk_free_rate / TRADING_DAYS
+    excess = rets - risk_free_rate / periods_per_year
     downside = excess[excess < 0]
     if downside.empty:
         return float("inf") if excess.mean() > 0 else 0.0
     dstd = math.sqrt(float((downside**2).mean()))
     if dstd < MIN_STD:
         return 0.0
-    return float(excess.mean() / dstd * math.sqrt(TRADING_DAYS))
+    return float(excess.mean() / dstd * math.sqrt(periods_per_year))
 
 
 def cagr(equity: pd.Series) -> float:
@@ -246,7 +258,10 @@ def _collect_warnings(report: PerformanceReport, result: BacktestResult) -> list
 
 
 def analyze(
-    result: BacktestResult, risk_free_rate: float = 0.0, total_fees: float = 0.0
+    result: BacktestResult,
+    risk_free_rate: float = 0.0,
+    total_fees: float = 0.0,
+    periods_per_year: int = TRADING_DAYS,
 ) -> PerformanceReport:
     """Spočítá kompletní report z výsledku backtestu."""
     equity = equity_series(result.equity_curve)
@@ -258,7 +273,9 @@ def analyze(
     annual = cagr(equity)
 
     rets = equity.pct_change().dropna()
-    volatility = float(rets.std(ddof=1) * math.sqrt(TRADING_DAYS) * 100.0) if len(rets) > 1 else 0.0
+    volatility = (
+        float(rets.std(ddof=1) * math.sqrt(periods_per_year) * 100.0) if len(rets) > 1 else 0.0
+    )
 
     exposure = 0.0
     if result.equity_curve:
@@ -272,8 +289,8 @@ def analyze(
         total_return_pct=total_return,
         cagr_pct=annual * 100.0,
         volatility_pct=volatility,
-        sharpe=sharpe_ratio(equity, risk_free_rate),
-        sortino=sortino_ratio(equity, risk_free_rate),
+        sharpe=sharpe_ratio(equity, risk_free_rate, periods_per_year),
+        sortino=sortino_ratio(equity, risk_free_rate, periods_per_year),
         max_drawdown_pct=max_dd * 100.0,
         max_drawdown_days=dd_days,
         calmar=annual / max_dd if max_dd > 0 else 0.0,
