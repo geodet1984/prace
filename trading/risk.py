@@ -87,6 +87,8 @@ class SizingDecision:
     stop_loss: float | None
     take_profit: float | None
     rejected_reason: str | None = None
+    risked_amount: float = 0.0
+    """Kolik peněz je v sázce, dojde-li na stop. Vstup pro Kellyho odhad."""
 
     @property
     def approved(self) -> bool:
@@ -163,6 +165,7 @@ class RiskManager:
         atr: float | None,
         open_positions: int,
         strength: float = 1.0,
+        size_multiplier: float = 1.0,
     ) -> SizingDecision:
         """Spočítá velikost nové pozice a úrovně stop-loss / take-profit.
 
@@ -191,7 +194,12 @@ class RiskManager:
                 0.0, None, None, "stop-loss by byl pod nulou (extrémní volatilita)"
             )
 
-        risk_amount = equity * cfg.risk_per_trade * _clamp(strength, 0.0, 1.0)
+        # ``size_multiplier`` je vstup z nadřazených vrstev — cílování
+        # volatility a Kellyho škálování. Aplikuje se na riskovanou částku
+        # *před* stropy na expozici a hotovost, takže žádný limit neobejde.
+        risk_amount = (
+            equity * cfg.risk_per_trade * _clamp(strength, 0.0, 1.0) * max(size_multiplier, 0.0)
+        )
         quantity = risk_amount / stop_distance
 
         # Strop na expozici — i při těsném stopu nechceme celý účet v jednom titulu.
@@ -217,7 +225,9 @@ class RiskManager:
         take_profit = (
             price + atr * cfg.take_profit_atr_mult if cfg.take_profit_atr_mult else None
         )
-        return SizingDecision(quantity, stop_loss, take_profit)
+        return SizingDecision(
+            quantity, stop_loss, take_profit, risked_amount=quantity * stop_distance
+        )
 
     # --- výstupy z pozice ------------------------------------------------
 

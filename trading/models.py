@@ -56,6 +56,7 @@ class Order:
     reason: str = ""
     stop_loss: float | None = None
     take_profit: float | None = None
+    risked_amount: float = 0.0
 
 
 @dataclass
@@ -68,6 +69,9 @@ class Position:
     entry_time: datetime
     stop_loss: float | None = None
     take_profit: float | None = None
+    initial_risk: float = 0.0
+    """Částka v sázce při otevření. Trailing stop ji později posune, ale
+    Kellyho odhad potřebuje původní hodnotu, aby R-násobky seděly."""
 
     def market_value(self, price: float) -> float:
         return self.quantity * price

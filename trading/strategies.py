@@ -236,10 +236,77 @@ class DonchianBreakout(Strategy):
         return f"{self.name}(entry={self.entry_window}, exit={self.exit_window})"
 
 
+class TimeSeriesMomentum(Strategy):
+    """Časové momentum: drž, pokud je výnos za posledních 12 měsíců kladný.
+
+    Nejlépe doložený jednoduchý signál v literatuře. Moskowitz, Ooi a Pedersen
+    (2012) ho ověřili na 58 futures kontraktech napříč akciovými indexy, měnami,
+    komoditami a dluhopisy za víc než 25 let. Dvanáctiměsíční výnos předpovídá
+    následující měsíc pozitivně prakticky v každé třídě aktiv; efekt drží zhruba
+    rok a pak se částečně obrací.
+
+    Na rozdíl od křížení průměrů má jediný parametr, takže není moc do čeho
+    zavrtat přeoptimalizování. Za tuhle robustnost se platí pomalostí:
+    z propadu vystupuje se zpožděním.
+
+    Upozornění na realitu: výnosy trend-following strategií jsou v posledním
+    desetiletí výrazně nižší než historicky a u nejrychlejších variant se
+    pokles Sharpe podařilo statisticky prokázat. Signál není mrtvý, ale
+    očekávat čísla z osmdesátých let by byla chyba.
+    """
+
+    name = "tsmom"
+
+    def __init__(self, lookback: int = 252, exit_lookback: int | None = None) -> None:
+        if lookback < 2:
+            raise ValueError("lookback musí být aspoň 2")
+        self.lookback = lookback
+        # Kratší okno pro výstup omezí "pilování" kolem nuly.
+        self.exit_lookback = exit_lookback or lookback
+
+    def prepare(self, df: pd.DataFrame) -> pd.DataFrame:
+        df = df.copy()
+        df["mom_entry"] = df["close"].pct_change(self.lookback)
+        df["mom_exit"] = (
+            df["mom_entry"]
+            if self.exit_lookback == self.lookback
+            else df["close"].pct_change(self.exit_lookback)
+        )
+        return df
+
+    @property
+    def warmup(self) -> int:
+        return max(self.lookback, self.exit_lookback) + 1
+
+    def on_bar(self, ctx: BarContext) -> Signal:
+        if not ctx.in_position:
+            momentum = ctx.row["mom_entry"]
+            if pd.isna(momentum):
+                return HOLD
+            if momentum > 0:
+                return Signal(
+                    SignalType.ENTER_LONG, 1.0, f"{self.lookback}d momentum {momentum:+.1%}"
+                )
+            return HOLD
+
+        momentum = ctx.row["mom_exit"]
+        if pd.isna(momentum):
+            return HOLD
+        if momentum <= 0:
+            return Signal(
+                SignalType.EXIT_LONG, 1.0, f"{self.exit_lookback}d momentum {momentum:+.1%}"
+            )
+        return HOLD
+
+    def describe(self) -> str:
+        return f"{self.name}(lookback={self.lookback}, exit={self.exit_lookback})"
+
+
 REGISTRY: dict[str, type[Strategy]] = {
     SmaCrossover.name: SmaCrossover,
     RsiMeanReversion.name: RsiMeanReversion,
     DonchianBreakout.name: DonchianBreakout,
+    TimeSeriesMomentum.name: TimeSeriesMomentum,
 }
 
 

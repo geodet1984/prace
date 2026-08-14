@@ -71,6 +71,7 @@ class Portfolio:
         stop_loss: float | None = None,
         take_profit: float | None = None,
         reason: str = "",
+        initial_risk: float = 0.0,
     ) -> Fill:
         """Otevře long pozici. Navyšování existující pozice není podporováno."""
         if quantity <= 0:
@@ -93,6 +94,7 @@ class Portfolio:
             entry_time=timestamp,
             stop_loss=stop_loss,
             take_profit=take_profit,
+            initial_risk=initial_risk,
         )
 
         fill = Fill(symbol, Side.BUY, quantity, price, fees, timestamp, reason)

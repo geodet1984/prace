@@ -62,19 +62,37 @@ def test_sharpe_of_constant_equity_is_zero():
     assert metrics.sharpe_ratio(equity) == 0.0
 
 
-def test_sharpe_is_positive_for_steady_growth():
+def growing(n=200, drift=0.001, noise=0.002, seed=0):
+    """Rostoucí equity křivka s kolísáním.
+
+    Přesně konstantní růst má nulovou volatilitu, takže Sharpe není
+    definovaný — takovou řadu nemá smysl používat na testy poměrových metrik.
+    """
+    rng = np.random.default_rng(seed)
+    steps = 1.0 + drift + rng.normal(0.0, noise, n)
+    return metrics.equity_series(curve(list(100 * np.cumprod(steps))))
+
+
+def test_sharpe_is_zero_for_perfectly_constant_returns():
+    """Nulová volatilita znamená nedefinovaný Sharpe, ne nekonečný."""
     equity = metrics.equity_series(curve([100 * 1.001**i for i in range(200)]))
-    assert metrics.sharpe_ratio(equity) > 1.0
+    assert metrics.sharpe_ratio(equity) == 0.0
+
+
+def test_sharpe_is_positive_for_steady_growth():
+    assert metrics.sharpe_ratio(growing()) > 1.0
 
 
 def test_risk_free_rate_lowers_sharpe():
-    equity = metrics.equity_series(curve([100 * 1.001**i for i in range(200)]))
+    equity = growing()
     assert metrics.sharpe_ratio(equity, 0.05) < metrics.sharpe_ratio(equity, 0.0)
 
 
 def test_sortino_ignores_upside_volatility():
-    """Řada, která jen roste (různě rychle), nemá záporné odchylky."""
-    equity = metrics.equity_series(curve([100 * 1.002**i for i in range(100)]))
+    """Řada bez jediného poklesu nemá záporné odchylky, takže Sortino je nekonečné."""
+    steps = 1.0 + np.linspace(0.001, 0.004, 100)
+    equity = metrics.equity_series(curve(list(100 * np.cumprod(steps))))
+    assert (equity.pct_change().dropna() > 0).all()
     assert metrics.sortino_ratio(equity) == float("inf")
 
 

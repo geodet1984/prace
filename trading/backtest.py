@@ -26,6 +26,7 @@ from .execution import CostModel
 from .models import BacktestResult, Order, Side, SignalType
 from .portfolio import InsufficientFunds, Portfolio
 from .risk import RiskConfig, RiskManager
+from .sizing import KellyConfig, KellySizer, VolatilityTargeter, VolTargetConfig
 from .strategies import BarContext, Strategy
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,21 @@ class BacktestConfig:
     close_at_end: bool = True
     """Uzavřít otevřené pozice na posledním baru, ať ztráta nezůstane schovaná."""
 
+    vol_target: VolTargetConfig | None = None
+    """Cílování volatility portfolia. None = vypnuto.
+
+    Škáluje velikost nových pozic tak, aby volatilita equity křivky mířila
+    na cílovou hodnotu. Podle Harveyho a spol. (2018) to u akcií zvyšuje
+    Sharpe a napříč všemi třídami aktiv omezuje extrémní výnosy.
+    """
+
+    kelly: KellyConfig | None = None
+    """Zlomkové Kellyho škálování podle realizovaných obchodů. None = vypnuto.
+
+    Zapíná se až po ``min_trades`` obchodech; do té doby drží základní
+    velikost pozice.
+    """
+
 
 class BacktestEngine:
     """Spouští strategii nad historickými daty."""
@@ -57,6 +73,11 @@ class BacktestEngine:
         self._rejected = 0
         self._bar_index = 0
         self._cooldown_until: dict[str, int] = {}
+        self._vol_targeter = (
+            VolatilityTargeter(self.config.vol_target) if self.config.vol_target else None
+        )
+        self._kelly = KellySizer(self.config.kelly) if self.config.kelly else None
+        self._last_equity: float | None = None
 
     # --- příprava --------------------------------------------------------
 
@@ -104,6 +125,12 @@ class BacktestEngine:
                 lambda qty, price: self.config.costs.commission(qty, price),
                 reason="konec testovaného období",
             )
+            # Poslední bod se přepíše, nepřidává se nový. Druhý zápis na
+            # stejné časové razítko by vyrobil equity křivku s duplicitním
+            # indexem a rozbil všechno, co ji spojuje podle času —
+            # například skládání out-of-sample úseků ve walk-forwardu.
+            if self.portfolio.equity_curve:
+                self.portfolio.equity_curve.pop()
             self.portfolio.mark_to_market(timeline[-1], self._last_price)
 
         return BacktestResult(
@@ -137,7 +164,35 @@ class BacktestEngine:
             self._collect_signals(timestamp, bars)
 
         self.portfolio.mark_to_market(timestamp, self._last_price)
-        self.risk.update_equity(self.portfolio.equity(self._last_price))
+        equity = self.portfolio.equity(self._last_price)
+        self.risk.update_equity(equity)
+        self._update_vol_target(equity)
+
+    def _update_vol_target(self, equity: float) -> None:
+        """Předá cílovači volatility dnešní výnos equity křivky."""
+        if self._vol_targeter is not None and self._last_equity and self._last_equity > 0:
+            self._vol_targeter.update(equity / self._last_equity - 1.0)
+        self._last_equity = equity
+
+    def _size_multiplier(self) -> float:
+        """Součin škálování z cílování volatility a z Kellyho odhadu."""
+        multiplier = 1.0
+        if self._vol_targeter is not None:
+            multiplier *= self._vol_targeter.scalar
+        if self._kelly is not None:
+            multiplier *= self._kelly.multiplier(self.config.risk.risk_per_trade)
+        return multiplier
+
+    def _close_position(self, symbol: str, price: float, timestamp, reason: str) -> None:
+        """Uzavře pozici a zaznamená výsledek pro Kellyho odhad."""
+        position = self.portfolio.get_position(symbol)
+        if position is None:
+            return
+        risked = position.initial_risk
+        fees = self.config.costs.commission(position.quantity, price)
+        _, trade = self.portfolio.sell(symbol, price, fees, timestamp, reason)
+        if self._kelly is not None and risked > 0:
+            self._kelly.record(trade.net_pnl, risked)
 
     def prepare_data(self, data: dict[str, pd.DataFrame]) -> dict[str, dict]:
         """Veřejný obal nad přípravou indikátorů (používá živý běh)."""
@@ -169,13 +224,13 @@ class BacktestEngine:
                         stop_loss=order.stop_loss + shift if order.stop_loss else None,
                         take_profit=order.take_profit + shift if order.take_profit else None,
                         reason=order.reason,
+                        initial_risk=order.risked_amount,
                     )
                 except (InsufficientFunds, ValueError) as exc:
                     self._rejected += 1
                     logger.debug("%s: nákup neproveden — %s", symbol, exc)
-            else:
-                if self.portfolio.has_position(symbol):
-                    self.portfolio.sell(symbol, fill_price, fees, timestamp, order.reason)
+            elif self.portfolio.has_position(symbol):
+                self._close_position(symbol, fill_price, timestamp, order.reason)
 
     def _check_exits(self, timestamp, bars: dict[str, dict]) -> None:
         """Vyhodnotí stop-loss / take-profit proti rozpětí baru."""
@@ -190,8 +245,7 @@ class BacktestEngine:
             if hit is not None:
                 price, reason = hit
                 fill_price = self.config.costs.fill_price(Side.SELL, price)
-                fees = self.config.costs.commission(position.quantity, fill_price)
-                self.portfolio.sell(symbol, fill_price, fees, timestamp, reason)
+                self._close_position(symbol, fill_price, timestamp, reason)
                 # Čekající příkaz na stejný titul je po výstupu bezpředmětný.
                 self._pending.pop(symbol, None)
                 if reason == "stop-loss" and self.config.risk.reentry_cooldown_bars:
@@ -236,6 +290,7 @@ class BacktestEngine:
                 atr=_atr_of(row),
                 open_positions=self.portfolio.open_position_count + self._pending_buys(),
                 strength=signal.strength,
+                size_multiplier=self._size_multiplier(),
             )
             if not decision.approved:
                 self._rejected += 1
@@ -249,6 +304,7 @@ class BacktestEngine:
                 signal.reason,
                 stop_loss=decision.stop_loss,
                 take_profit=decision.take_profit,
+                risked_amount=decision.risked_amount,
             )
 
     # --- pomocné ---------------------------------------------------------

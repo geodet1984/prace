@@ -193,12 +193,29 @@ def test_close_at_end_disabled_leaves_position_open():
     assert engine.portfolio.positions
 
 
-def test_equity_curve_has_one_point_per_bar():
+def test_equity_curve_has_exactly_one_point_per_bar():
+    """Závěrečné uzavření pozic poslední bod přepíše, nepřidává druhý.
+
+    Regrese: duplicitní časové razítko rozbíjelo skládání out-of-sample
+    úseků ve walk-forwardu.
+    """
     df = data_module.synthetic("X", days=120, seed=2)
     engine = BacktestEngine(strategies.create("sma_crossover", fast=5, slow=10), loose_config())
     result = engine.run({"X": df})
-    # +1 bod navíc po závěrečném uzavření pozic
-    assert len(result.equity_curve) in (len(df), len(df) + 1)
+
+    assert len(result.equity_curve) == len(df)
+    timestamps = [p.timestamp for p in result.equity_curve]
+    assert len(set(timestamps)) == len(timestamps)
+
+
+def test_final_equity_point_reflects_the_closing_trades():
+    """Přepsaný poslední bod musí obsahovat výsledek závěrečného prodeje."""
+    df = make_frame([100.0] * 25, highs=[101.0] * 25, lows=[99.0] * 25)
+    engine = BacktestEngine(ScriptedStrategy({22: ENTER}), loose_config(close_at_end=True))
+    result = engine.run({"X": df})
+
+    assert result.equity_curve[-1].positions_value == 0.0
+    assert result.equity_curve[-1].cash == pytest.approx(result.final_equity)
 
 
 # --- stop-loss v enginu -------------------------------------------------

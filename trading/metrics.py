@@ -17,6 +17,9 @@ from .models import BacktestResult, EquityPoint, Trade
 
 TRADING_DAYS = 252
 
+MIN_STD = 1e-12
+"""Mez, pod kterou je řada považovaná za konstantní — viz ``stats.MIN_STD``."""
+
 
 @dataclass
 class PerformanceReport:
@@ -142,7 +145,7 @@ def sharpe_ratio(equity: pd.Series, risk_free_rate: float = 0.0) -> float:
         return 0.0
     excess = rets - risk_free_rate / TRADING_DAYS
     std = excess.std(ddof=1)
-    if std == 0 or math.isnan(std):
+    if math.isnan(std) or std < MIN_STD:
         return 0.0
     return float(excess.mean() / std * math.sqrt(TRADING_DAYS))
 
@@ -157,7 +160,7 @@ def sortino_ratio(equity: pd.Series, risk_free_rate: float = 0.0) -> float:
     if downside.empty:
         return float("inf") if excess.mean() > 0 else 0.0
     dstd = math.sqrt(float((downside**2).mean()))
-    if dstd == 0:
+    if dstd < MIN_STD:
         return 0.0
     return float(excess.mean() / dstd * math.sqrt(TRADING_DAYS))
 
