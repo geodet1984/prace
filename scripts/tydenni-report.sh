@@ -35,6 +35,12 @@
 # Zlomkové akcie jsou nutnost: bez nich se za 200 USD nedá koupit ani jedna
 #   akcie SPY a celá diverzifikace padá.
 #
+# Daňový strop: v ČR je příjem z prodeje cenných papírů osvobozený, pokud
+#   úhrn HRUBÝCH PRODEJŮ (ne zisku) za rok nepřesáhne 100 000 Kč. Automat
+#   s ~31 obraty ročně a pozicí 12 % kapitálu se do limitu vejde zhruba do
+#   1 200 USD kapitálu. Nad tím začínáte podávat přiznání za každý obchod —
+#   tříletý časový test u strategie s držbou ~35 dní nikdy neprojde.
+#
 # Kill-switch na 35 %, ne na 25 %. V paper fázi je smyslem se učit, ne chránit
 #   kapitál — a přísný kill-switch systém utne dřív, než stihne ukázat, jak se
 #   chová v propadu. Na ostrý účet ho stáhněte zpátky.
@@ -65,6 +71,7 @@ python3 -m trading paper \
     --costs default \
     --state "$STATE" \
     --fractional \
+    --min-position-value 2 \
     --risk-per-trade 0.015 \
     --stop-atr 3.0 \
     --max-position 0.12 \

@@ -75,6 +75,7 @@ def _risk_from_args(args) -> RiskConfig:
         max_drawdown_pct=args.max_drawdown,
         allow_fractional=args.fractional,
         reentry_cooldown_bars=args.reentry_cooldown,
+        min_position_value=args.min_position_value,
     )
 
 
@@ -85,6 +86,20 @@ def _config_from_args(args, close_at_end: bool = True) -> BacktestConfig:
         else None
     )
     kelly = KellyConfig(fraction=args.kelly) if args.kelly else None
+
+    # Nejtišší způsob, jak si vyrobit mrtvý systém: nechat výchozí minimální
+    # hodnotu pozice na malém účtu. Engine pak jen zamítá signál za signálem
+    # a report ukáže nula obchodů, aniž by řekl proč.
+    largest = args.capital * args.max_position
+    if largest < args.min_position_value:
+        logger.warning(
+            "největší možná pozice je %.2f, ale minimum je %.2f — takhle "
+            "neproběhne ani jeden obchod. Snižte --min-position-value "
+            "(u účtu do 500 USD zkuste 2) nebo zvyšte --max-position.",
+            largest,
+            args.min_position_value,
+        )
+
     return BacktestConfig(
         initial_capital=args.capital,
         costs=COST_PRESETS[args.costs],
@@ -460,6 +475,12 @@ def build_parser() -> argparse.ArgumentParser:
         p.add_argument("--max-daily-loss", type=float, default=0.03, help="denní stop účtu")
         p.add_argument("--max-drawdown", type=float, default=0.20, help="kill-switch na drawdown")
         p.add_argument("--fractional", action="store_true", help="povolit zlomkové akcie")
+        p.add_argument(
+            "--min-position-value",
+            type=float,
+            default=50.0,
+            help="pod tuhle hodnotu se pozice neotevře; u malých účtů snižte",
+        )
         p.add_argument(
             "--vol-target",
             type=float,
