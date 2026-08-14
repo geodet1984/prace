@@ -11,7 +11,9 @@
 # Server poslouchá jen na loopbacku (127.0.0.1). Stav účtu je soukromá věc
 # a do sítě ho vystavovat není důvod.
 #
-# Proměnné: PORT, STATE, VENV
+# Proměnné: PORT, STATE, VENV, BROWSER
+#
+#     BROWSER=Firefox ./scripts/dashboard.sh    # když Safari blokuje HTTP
 
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -19,6 +21,7 @@ cd "$(dirname "$0")/.."
 PORT="${PORT:-8765}"
 STATE="${STATE:-data/paper_state.json}"
 VENV="${VENV:-.venv}"
+BROWSER="${BROWSER:-}"
 
 if [ -d "$VENV" ]; then
     # shellcheck disable=SC1091
@@ -34,13 +37,26 @@ fi
 URL="http://localhost:${PORT}"
 CHECK="http://127.0.0.1:${PORT}"
 
+# Běží-li přehled už z minula, druhý server se na port nenaváže a Python
+# skončí tracebackem, ze kterého není poznat, že vlastně všechno funguje.
+# Otevřeme tedy ten běžící a končíme.
+if curl -sf -o /dev/null "$CHECK/api/verze" 2>/dev/null; then
+    echo "Přehled už běží na $URL — otevírám ho."
+    otevri() { [ -n "$BROWSER" ] && open -a "$BROWSER" "$URL" || open "$URL"; }
+    [ "$(uname -s)" = "Darwin" ] && otevri
+    exit 0
+fi
+
 # Prohlížeč otevřeme až ve chvíli, kdy server odpovídá. Otevřít ho dřív
 # znamená prázdnou stránku a ruční F5.
 (
     for _ in $(seq 1 40); do
         if curl -sf -o /dev/null "$CHECK/api/verze" 2>/dev/null; then
             case "$(uname -s)" in
-                Darwin) open "$URL" ;;
+                # BROWSER přebije výchozí prohlížeč. Safari s vynuceným HTTPS
+                # odmítne i http://localhost, a přepnout celý systém kvůli
+                # jedné stránce nedává smysl.
+                Darwin) [ -n "$BROWSER" ] && open -a "$BROWSER" "$URL" || open "$URL" ;;
                 Linux)  command -v xdg-open >/dev/null && xdg-open "$URL" >/dev/null 2>&1 ;;
             esac
             exit 0
