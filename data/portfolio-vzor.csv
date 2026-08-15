@@ -3,9 +3,9 @@
 # Vlastní knihu si založte jako data/portfolio.csv (ta je mimo git, protože
 # do repozitáře vaše obchody nepatří) a spusťte:
 #
-#     python -m trading portfolio --kniha data/portfolio.csv
+#     python -m trading portfolio --kniha data/portfolio.csv --czk
 #
-# nebo, chcete-li přehled v korunách i s rozpadem kurzu, v prohlížeči:
+# nebo totéž v prohlížeči:
 #
 #     python -m trading dashboard --kniha data/portfolio.csv
 #
@@ -37,10 +37,13 @@
 # Ukázka níž je schválně smíšená: vklad v korunách, nákupy v dolarech
 # a v eurech.
 #
-# POZOR: `trading portfolio` v terminálu zatím kurzy neumí a sčítá čísla
-# tak, jak jsou zapsaná — u smíšené knihy je jeho součet nesmysl. Přehled,
-# který měny opravdu přepočítá, je zatím jen ten v prohlížeči:
-# `python -m trading dashboard --kniha ...`.
+# U smíšené knihy proto přidejte `--czk`:
+#
+#     python -m trading portfolio --kniha data/portfolio.csv --czk
+#
+# Bez něj se sčítají dolary s korunami a součet je nesmysl. Příkaz na to
+# upozorní, jakmile v knize najde víc měn, ale spolehnout se na varování
+# je horší než ten přepínač rovnou napsat.
 day,type,symbol,quantity,price,amount,fee,currency,note
 2024-01-15,vklad,,,,50000.00,,CZK,první vklad
 2024-01-22,nakup,SPY,2,478.50,-957.00,1.00,USD,S&P 500 ETF

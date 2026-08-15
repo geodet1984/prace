@@ -1,6 +1,8 @@
 """Smoke testy CLI — běží na syntetických datech, takže nepotřebují síť."""
 
 import json
+import re
+from datetime import date
 
 import pytest
 
@@ -100,6 +102,118 @@ def test_missing_csv_returns_error_code(tmp_path, capsys):
 def test_unknown_strategy_is_rejected():
     with pytest.raises(SystemExit):
         main(["backtest", "--strategy", "neexistuje", "--synthetic"])
+
+
+# --- portfolio a korunový přepočet --------------------------------------
+
+
+KNIHA = """day,type,symbol,quantity,price,amount,fee,currency,note
+2024-01-10,vklad,,,,50000.00,,CZK,
+2024-01-10,nakup,X,10,100,-1000.00,,USD,
+"""
+
+
+@pytest.fixture
+def kniha_csv(tmp_path):
+    cesta = tmp_path / "portfolio.csv"
+    cesta.write_text(KNIHA, encoding="utf-8")
+    return str(cesta)
+
+
+@pytest.fixture
+def bez_site(monkeypatch):
+    """Utne CLI od sítě: pevná cena titulu a pevné kurzy k datům.
+
+    Kurz 25 → 22,5 Kč za dolar je záměrně posílení koruny o 10 %, zatímco
+    titul roste o 10 %. Součin 1,1 × 0,9 není 1, takže výsledek musí být
+    lehce záporný — a hlavně musí jít rozložit na dvě velké části proti
+    sobě, ne na jedno malé číslo.
+    """
+    import pandas as pd
+
+    from trading import cli as cli_module
+    from trading.fx import KurzyPodleDne
+
+    def fake_fetch(symbol, *a, **kw):
+        return pd.DataFrame({"close": [110.0]})
+
+    kurzy = KurzyPodleDne(
+        {("USD", date(2024, 1, 10)): 25.0, ("USD", date(2025, 1, 10)): 22.5}
+    )
+    monkeypatch.setattr(cli_module.data_module, "fetch", fake_fetch)
+    monkeypatch.setattr(cli_module.fx_module, "Kurzovnik", lambda *a, **kw: kurzy)
+    return kurzy
+
+
+def _cislo(out, popisek):
+    """Vytáhne číslo z řádku výpisu — výpis je jediné, co uživatel vidí."""
+    for radek in out.splitlines():
+        if popisek in radek:
+            m = re.search(r"(-?[\d\s,]+\.\d{2})", radek.replace(" ", " "))
+            if m:
+                return float(m.group(1).replace(" ", "").replace(",", ""))
+    raise AssertionError(f"řádek {popisek!r} ve výpisu není:\n{out}")
+
+
+def test_czk_rozpad_se_scita_na_zisk_z_pozic(kniha_csv, bez_site, capsys, monkeypatch):
+    """Výkon aktiv a pohyb kurzu se sčítají na zisk z POZIC, ne na "celkem".
+
+    Přičíst je k rozpadu podle druhu (dividendy, daně, poplatky) by tytéž
+    peníze započetlo dvakrát — jsou to dva pohledy na stejné zhodnocení,
+    jednou podle druhu a jednou podle příčiny.
+    """
+    code, out = run(["portfolio", "--kniha", kniha_csv, "--czk"], capsys)
+    assert code == 0
+
+    vykon = _cislo(out, "Výkon aktiv")
+    kurz = _cislo(out, "Pohyb kurzu")
+    nerealizovany = _cislo(out, "Nerealizovaný zisk")
+    realizovany = _cislo(out, "Realizovaný zisk")
+
+    assert vykon + kurz == pytest.approx(nerealizovany + realizovany, abs=0.01)
+    # Dvě velké částky proti sobě, ne jedna malá: aktivum +2500, kurz -2750.
+    assert vykon > 2000 and kurz < -2000
+    assert vykon + kurz < 0
+
+
+def test_czk_neprictene_k_celkem(kniha_csv, bez_site, capsys):
+    """Kdyby se rozpad podle příčiny přičetl k "celkem", součet by se
+    zdvojil — tenhle test to chytí na konkrétním čísle."""
+    _, out = run(["portfolio", "--kniha", kniha_csv, "--czk"], capsys)
+    assert _cislo(out, "Celkem") == pytest.approx(
+        _cislo(out, "Nerealizovaný zisk") + _cislo(out, "Realizovaný zisk"), abs=0.01
+    )
+
+
+def test_smisena_kniha_bez_czk_varuje(kniha_csv, bez_site, capsys):
+    """Bez přepočtu se sčítají dolary s korunami. Z čísla to poznat nejde,
+    takže to musí být vidět jinak — jinak uživatel uvěří nesmyslu."""
+    code = main(["portfolio", "--kniha", kniha_csv])
+    zachyceno = capsys.readouterr()
+    assert code == 0
+    assert "míchá měny" in zachyceno.err
+    assert "--czk" in zachyceno.err
+
+
+def test_czk_funguje_i_kdyz_cena_neni(kniha_csv, capsys, monkeypatch):
+    """Bez sítě se přehled nesmí složit — ocení se pořizovací cenou a řekne to."""
+    from trading import cli as cli_module
+    from trading.data import DataError
+    from trading.fx import KurzyPodleDne
+
+    def padne(symbol, *a, **kw):
+        raise DataError(f"{symbol}: síť není")
+
+    monkeypatch.setattr(cli_module.data_module, "fetch", padne)
+    monkeypatch.setattr(
+        cli_module.fx_module,
+        "Kurzovnik",
+        lambda *a, **kw: KurzyPodleDne({("USD", date(2024, 1, 10)): 25.0}),
+    )
+
+    code, out = run(["portfolio", "--kniha", kniha_csv, "--czk"], capsys)
+    assert code == 0
+    assert "Bez aktuální ceny" in out
 
 
 # --- pomocné funkce -----------------------------------------------------

@@ -20,6 +20,7 @@ import pandas as pd
 from . import dashboard as dashboard_module
 from . import data as data_module
 from . import ensemble as ensemble_module
+from . import fx as fx_module
 from . import ledger as ledger_module
 from . import stats as stats_module
 from . import strategies
@@ -332,7 +333,9 @@ def cmd_ledger(args) -> int:
     """Přehled skutečného portfolia. Nic neobchoduje, jen počítá.
 
     Ceny se stahují jen pro ocenění otevřených pozic; není-li síť, použije
-    se cache a chybějící tituly se přiznají místo tichého odhadu.
+    se cache a chybějící tituly se přiznají místo tichého odhadu. Totéž
+    platí pro kurzy s ``--czk``: kurzovník má vlastní cache a offline
+    sáhne po nejbližším starším lístku.
     """
     kniha = ledger_module.Ledger.from_csv(args.kniha)
     drzeno = kniha.holdings()
@@ -345,8 +348,23 @@ def cmd_ledger(args) -> int:
         except (data_module.DataError, KeyError, IndexError) as exc:
             logger.warning("%s: cenu se nepodařilo zjistit (%s)", symbol, exc)
 
-    v = kniha.valuation(ceny)
-    mena = kniha.transactions[0].currency if kniha.transactions else ""
+    if args.czk:
+        v = kniha.valuation_czk(ceny, fx_module.Kurzovnik())
+        mena = v["mena"]
+    else:
+        v = kniha.valuation(ceny)
+        meny = {t.currency for t in kniha.transactions}
+        mena = kniha.transactions[0].currency if kniha.transactions else ""
+        if len(meny) > 1:
+            # Bez přepočtu se tady sčítají dolary s korunami. Součet je
+            # nesmysl a nejde to poznat z čísla — jen z toho, že kniha má
+            # víc měn. Říct to nahlas je jediná obrana.
+            print(
+                f"Varování: kniha míchá měny ({', '.join(sorted(meny))}), ale počítá se bez "
+                f"přepočtu — součty pod hlavičkou {mena} sčítají různé měny dohromady. "
+                "Použijte --czk.",
+                file=sys.stderr,
+            )
 
     print(f"\n  Portfolio — {len(kniha.transactions)} pohybů, {v['pozic']} titulů\n")
     print(f"  Vloženo vlastních peněz   {v['vlozeno']:>12,.2f} {mena}")
@@ -368,6 +386,26 @@ def cmd_ledger(args) -> int:
             f"\n  Z toho poplatky za obchody {v['poplatky_v_obchodech']:>11,.2f} {mena}"
             "  (už započtené v cenách)"
         )
+
+    if args.czk:
+        # Druhý rozpad TÉHOŽ zhodnocení z pozic — podle příčiny, ne podle
+        # druhu. Proto stojí odděleně a proti jinému součtu: sečte se na
+        # nerealizovaný + realizovaný zisk, ne na "celkem". Přičíst ho
+        # k rozpadu výše by tytéž peníze započetlo dvakrát.
+        z_pozic = v["nerealizovany_zisk"] + v["realizovany_zisk"]
+        print(f"\n  Z čeho vznikl zisk z pozic ({z_pozic:,.2f} {mena}):")
+        print(f"    Výkon aktiv             {v['vykon_aktiva']:>12,.2f} {mena}")
+        print(f"    Pohyb kurzu             {v['kurzovy_rozdil']:>12,.2f} {mena}")
+        print("    (dividend, daní ani poplatků se pohyb ceny titulu netýká)")
+
+        if v["kurzy"]:
+            kurzy_text = ", ".join(f"{m} {k:.3f}" for m, k in sorted(v["kurzy"].items()))
+            print(f"\n  Kurzy k {v['k_datu']}: {kurzy_text}")
+        if v["bez_kurzu"]:
+            print(
+                f"  Bez kurzu, a proto mimo součty: {', '.join(v['bez_kurzu'])}",
+                file=sys.stderr,
+            )
 
     if v["bez_ceny"]:
         print(f"\n  Bez aktuální ceny (oceněno pořizovací): {', '.join(v['bez_ceny'])}")
@@ -725,6 +763,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p_led = sub.add_parser("portfolio", help="přehled skutečného portfolia z účetní knihy")
     p_led.add_argument("--kniha", default="data/portfolio.csv", help="CSV s pohyby")
+    p_led.add_argument(
+        "--czk",
+        action="store_true",
+        help="přepočíst na koruny kurzy ČNB ke dni každého pohybu; "
+        "u knihy s víc měnami je to jediný způsob, jak dostat smysluplný součet",
+    )
     p_led.set_defaults(func=cmd_ledger)
 
     p_fetch = sub.add_parser("fetch", help="stáhnout a nacachovat data")
