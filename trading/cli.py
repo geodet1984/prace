@@ -13,6 +13,7 @@ import argparse
 import json
 import logging
 import sys
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -24,6 +25,7 @@ from . import fx as fx_module
 from . import ledger as ledger_module
 from . import stats as stats_module
 from . import strategies
+from . import vypis as vypis_module
 from .backtest import BacktestConfig, BacktestEngine
 from .benchmark import buy_and_hold
 from .calendar import EventCalendar
@@ -337,7 +339,7 @@ def cmd_ledger(args) -> int:
     platí pro kurzy s ``--czk``: kurzovník má vlastní cache a offline
     sáhne po nejbližším starším lístku.
     """
-    kniha = ledger_module.Ledger.from_csv(args.kniha)
+    kniha = _nacti_knihu(Path(args.kniha))
     drzeno = kniha.holdings()
 
     ceny: dict[str, float] = {}
@@ -369,12 +371,20 @@ def cmd_ledger(args) -> int:
     print(f"\n  Portfolio — {len(kniha.transactions)} pohybů, {v['pozic']} titulů\n")
     print(f"  Vloženo vlastních peněz   {v['vlozeno']:>12,.2f} {mena}")
     print(f"  Hodnota portfolia         {v['hodnota']:>12,.2f} {mena}")
+    if args.czk:
+        print(f"  Hotovost                  {v['hotovost']:>12,.2f} {mena}")
     print(f"  {'-' * 44}")
     print(f"  Nerealizovaný zisk        {v['nerealizovany_zisk']:>12,.2f} {mena}")
     print(f"  Realizovaný zisk          {v['realizovany_zisk']:>12,.2f} {mena}")
     print(f"  Dividendy                 {v['dividendy']:>12,.2f} {mena}")
     print(f"  Daně                      {v['dane']:>12,.2f} {mena}")
     print(f"  Poplatky mimo obchody     {v['poplatky']:>12,.2f} {mena}")
+    if args.czk:
+        # Nevyměněná cizí hotovost je pořád měnová sázka, a tenhle řádek je
+        # jediné místo, kde je to vidět. Bez něj by se dolarová dividenda
+        # ponechaná v dolarech tvářila, že se od výplaty nehnula.
+        print(f"  Kurz na hotovosti         {v['kurzovy_rozdil_hotovosti']:>12,.2f} {mena}")
+        print(f"  Spread na směnách         {v['smeny']:>12,.2f} {mena}")
     print(f"  {'=' * 44}")
     print(f"  Celkem                    {v['celkem']:>12,.2f} {mena}")
     if v["vlozeno"]:
@@ -398,6 +408,21 @@ def cmd_ledger(args) -> int:
         print(f"    Pohyb kurzu             {v['kurzovy_rozdil']:>12,.2f} {mena}")
         print("    (dividend, daní ani poplatků se pohyb ceny titulu netýká)")
 
+        if v["hotovost_meny"]:
+            zustatky = ", ".join(
+                f"{z['zustatek']:,.2f} {z['mena']}" for z in v["hotovost_meny"]
+            )
+            print(f"\n  Hotovost po měnách: {zustatky}")
+        if v["dopoctene_smeny"]:
+            # Kniha, ve které chybí zápis směny, se spočítat dá — jen se
+            # k ní musí přidat předpoklad. Říct ho nahlas je povinnost.
+            print(
+                f"  U {len(v['dopoctene_smeny'])} pohybů chyběl v knize převod měny a dopočítal "
+                "se kurzem ČNB toho dne.\n  Skutečný kurz od brokera byl horší — zapište směnu "
+                "(typ smena), ať to sedí.",
+                file=sys.stderr,
+            )
+
         if v["kurzy"]:
             kurzy_text = ", ".join(f"{m} {k:.3f}" for m, k in sorted(v["kurzy"].items()))
             print(f"\n  Kurzy k {v['k_datu']}: {kurzy_text}")
@@ -415,13 +440,156 @@ def cmd_ledger(args) -> int:
         print("\n  Časový test — kdy dávky projdou tříletou lhůtou:")
         for r in hodiny[:10]:
             print(
-                f"    {r['symbol']:<6} {r['quantity']:>10,.3f} ks   "
+                f"    {r['symbol']:<8} {r['quantity']:>10,.3f} ks   "
                 f"nakoupeno {r['nakoupeno']}   osvobozeno {r['osvobozeno_od']}"
                 f"   (za {r['dni_zbyva']} dní)"
             )
         print("\n  Není to daňové poradenství — jen rozdíl dat z vašich zápisů.")
     print()
     return 0
+
+
+def _nacti_knihu(cesta: Path, *, zalozit: bool = False) -> ledger_module.Ledger:
+    """Kniha z disku, nebo prázdná při zakládání.
+
+    Zakládá se jen tam, kde to dává smysl (zápis a import). Přehled nad
+    neexistující knihou je překlep v cestě, ne prázdné portfolio — a mlčky
+    ukázat nuly by uživatele nechalo hledat chybu v evidenci.
+    """
+    if cesta.exists():
+        return ledger_module.Ledger.from_csv(cesta)
+    if not zalozit:
+        raise ledger_module.LedgerError(f"kniha {cesta} neexistuje")
+    print(f"Kniha {cesta} zatím není, zakládám novou.")
+    return ledger_module.Ledger()
+
+
+def _po_zapisu(kniha: ledger_module.Ledger) -> None:
+    """Připomene kontrolu, našla-li kniha po zápisu něco podezřelého.
+
+    Levnější varianta téhož: nechat člověka zjistit až za rok, že prodal
+    titul, který v knize nikdy nekoupil.
+    """
+    nalezy = kniha.kontrola()
+    if nalezy:
+        chyb = sum(1 for n in nalezy if n.zavaznost == "chyba")
+        print(
+            f"\nKontrola knihy: {len(nalezy)} nálezů, z toho {chyb} chyb. "
+            "Podrobnosti: python -m trading kontrola --kniha ...",
+            file=sys.stderr,
+        )
+
+
+def cmd_zapis(args) -> int:
+    """Připíše jeden pohyb do knihy.
+
+    Ruční editace CSV je nejjistější cesta k překlepu — a k tomu, že to
+    člověk po třetím obchodu vzdá. Zápis přes příkaz projde stejnou
+    validací jako import, pozná duplicitu a soubor přepisuje atomicky.
+    """
+    cesta = Path(args.kniha)
+    kniha = _nacti_knihu(cesta, zalozit=True)
+
+    druh = ledger_module.TxType(args.typ)
+    pohyb = ledger_module.Transaction(
+        day=vypis_module.datum(args.den) if args.den else date.today(),
+        type=druh,
+        amount=vypis_module.castka(druh, args.castka or 0.0, args.pocet, args.cena),
+        symbol=args.symbol,
+        quantity=args.pocet,
+        price=args.cena,
+        fee=args.poplatek,
+        currency=args.mena,
+        note=args.poznamka or "",
+    )
+
+    if not kniha.add(pohyb):
+        # Idempotence: dvakrát spuštěný zápis nesmí zdvojit obchod. Návratový
+        # kód je nula schválně — opakované spuštění není chyba.
+        print(f"Tenhle pohyb už v knize je ({pohyb.day} {pohyb.type.value}), nic se nezapsalo.")
+        return 0
+
+    kniha.to_csv(cesta)
+    print(
+        f"Zapsáno do {cesta}: {pohyb.day} {pohyb.type.value} "
+        f"{pohyb.symbol or ''} {pohyb.amount:,.2f} {pohyb.currency}".replace("  ", " ")
+    )
+    print(f"Kniha má {len(kniha.transactions)} pohybů.")
+    _po_zapisu(kniha)
+    return 0
+
+
+def cmd_import(args) -> int:
+    """Nahraje cizí CSV výpis. Bez ``--ulozit`` jen ukáže, co by udělal."""
+    vysledek = vypis_module.nacti_vypis(
+        args.vypis,
+        vypis_module.parse_mapovani(args.mapovani),
+        vychozi_mena=args.mena,
+        datum_format=args.datum_format,
+    )
+    cesta = Path(args.kniha)
+    kniha = _nacti_knihu(cesta, zalozit=True)
+    nova, pridano, preskoceno = ledger_module.merge(kniha, vysledek.pohyby)
+
+    print(f"\n  Výpis {args.vypis} → kniha {cesta}\n")
+    print("  Mapování sloupců:")
+    for nas in ledger_module.Ledger.SLOUPCE:
+        cizi = vysledek.mapovani.get(nas)
+        print(f"    {nas:<10} {cizi if cizi else '— není, nechá se prázdné'}")
+
+    print(f"\n  Přečteno {len(vysledek.pohyby)} pohybů: {pridano} nových, {preskoceno} už v knize.")
+    if vysledek.preskocene:
+        print(f"  Nepřečteno {len(vysledek.preskocene)} řádků:")
+        for cislo_radku, duvod in vysledek.preskocene[:10]:
+            print(f"    řádek {cislo_radku}: {duvod}")
+
+    ukazka = [t for t in nova.transactions if t not in kniha.transactions][:15]
+    if ukazka:
+        print("\n  Přibude:")
+        for t in ukazka:
+            print(
+                f"    {t.day}  {t.type.value:<10}{(t.symbol or ''):<8}"
+                f"{t.quantity or '':>10}{t.price or '':>10}{t.amount:>12,.2f} {t.currency}"
+            )
+
+    if not args.ulozit:
+        # Náhled je výchozí schválně. Cizí soubor je jediná cesta, kterou do
+        # knihy teče něco, co uživatel nepsal — a špatně uhodnuté mapování
+        # se pozná z náhledu, ne z přepsané evidence.
+        print("\n  NÁHLED — nic se neuložilo. Sedí-li mapování, spusťte znovu s --ulozit.\n")
+        return 0
+
+    if pridano:
+        nova.to_csv(cesta)
+        print(f"\n  Uloženo, kniha má {len(nova.transactions)} pohybů.\n")
+        _po_zapisu(nova)
+    else:
+        print("\n  Nic nového — kniha zůstala beze změny.\n")
+    return 0
+
+
+def cmd_kontrola(args) -> int:
+    """Prověří knihu a vypíše, co v ní nesedí."""
+    kniha = _nacti_knihu(Path(args.kniha))
+    nalezy = kniha.kontrola()
+
+    print(f"\n  Kontrola knihy {args.kniha} — {len(kniha.transactions)} pohybů\n")
+    if not nalezy:
+        print("  Nic podezřelého. Neznamená to, že je kniha správně — jen že si\n"
+              "  neodporuje a nic v ní nevybočuje z řady.\n")
+        return 0
+
+    for nalez in nalezy:
+        print(f"  {nalez}")
+    chyb = sum(1 for n in nalezy if n.zavaznost == "chyba")
+    print(f"\n  Celkem {len(nalezy)} nálezů, z toho {chyb} chyb.")
+    print(
+        "  „pozor\" nemusí být chyba — dividenda po prodeji celé pozice nebo\n"
+        "  jednorázový velký vklad jsou v pořádku. Podívejte se na ně a nechte být.\n"
+    )
+    # Nenulový kód jen u skutečného rozporu, aby šlo kontrolu zapojit do
+    # skriptu, aniž by ho shodilo každé upozornění.
+    return 1 if chyb else 0
 
 
 def cmd_signals(args) -> int:
@@ -771,6 +939,69 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_led.set_defaults(func=cmd_ledger)
 
+    p_zap = sub.add_parser(
+        "zapis",
+        help="připsat jeden pohyb do knihy",
+        description=(
+            "Připíše pohyb do účetní knihy. Příklady:\n"
+            "  python -m trading zapis nakup --symbol IWDA.AS --pocet 4 --cena 88.20 "
+            "--poplatek 0.5 --mena EUR\n"
+            "  python -m trading zapis vklad --castka 50000 --mena CZK\n"
+            "  python -m trading zapis smena --castka -24500 --mena CZK --den 2026-08-14\n"
+            "  python -m trading zapis smena --castka 1000 --mena USD --den 2026-08-14\n\n"
+            "Směna se zapisuje jako dvojice řádků, jeden za každou měnu."
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_zap.add_argument(
+        "typ", choices=[t.value for t in ledger_module.TxType], help="druh pohybu"
+    )
+    p_zap.add_argument("--kniha", default="data/portfolio.csv", help="CSV s pohyby")
+    p_zap.add_argument("--den", help="datum pohybu (YYYY-MM-DD nebo DD.MM.RRRR); výchozí dnes")
+    p_zap.add_argument("--symbol", help="ticker; povinný u nákupu, prodeje a dividendy")
+    p_zap.add_argument("--pocet", type=float, default=0.0, help="počet kusů (sloupec quantity)")
+    p_zap.add_argument("--cena", type=float, default=0.0, help="cena za kus (sloupec price)")
+    p_zap.add_argument(
+        "--castka",
+        type=float,
+        default=None,
+        help="peněžní tok (sloupec amount); u nákupu a prodeje se dopočte z počtu a ceny. "
+        "Znaménko určuje druh pohybu, ne vy — jen u směny se bere, jak ho zadáte",
+    )
+    p_zap.add_argument("--poplatek", type=float, default=0.0, help="poplatek za obchod")
+    p_zap.add_argument("--mena", default="CZK", help="měna toho pohybu (sloupec currency)")
+    p_zap.add_argument("--poznamka", help="cokoli pro dohledání")
+    p_zap.set_defaults(func=cmd_zapis)
+
+    p_imp = sub.add_parser(
+        "import",
+        help="nahrát cizí CSV výpis do knihy (bez --ulozit jen náhled)",
+    )
+    p_imp.add_argument("--vypis", required=True, help="CSV od brokera")
+    p_imp.add_argument("--kniha", default="data/portfolio.csv", help="cílová kniha")
+    p_imp.add_argument(
+        "--mapovani",
+        action="append",
+        help="ruční mapování sloupců, např. --mapovani day=Datum,type=Akce; "
+        "doplňuje a přebíjí to uhodnuté podle hlavičky",
+    )
+    p_imp.add_argument(
+        "--mena", default="USD", help="měna pro řádky, kde výpis měnu neuvádí"
+    )
+    p_imp.add_argument(
+        "--datum-format",
+        dest="datum_format",
+        help="formát data pro strptime, např. '%%d/%%m/%%Y'; nutný u dat s lomítky",
+    )
+    p_imp.add_argument(
+        "--ulozit", action="store_true", help="opravdu zapsat do knihy (bez toho jen náhled)"
+    )
+    p_imp.set_defaults(func=cmd_import)
+
+    p_kon = sub.add_parser("kontrola", help="prověřit knihu a vypsat, co v ní nesedí")
+    p_kon.add_argument("--kniha", default="data/portfolio.csv", help="CSV s pohyby")
+    p_kon.set_defaults(func=cmd_kontrola)
+
     p_fetch = sub.add_parser("fetch", help="stáhnout a nacachovat data")
     add_data_args(p_fetch)
     p_fetch.set_defaults(func=cmd_fetch)
@@ -788,7 +1019,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         return args.func(args)
-    except (ValueError, data_module.DataError) as exc:
+    except (ValueError, data_module.DataError, ledger_module.LedgerError) as exc:
         print(f"Chyba: {exc}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

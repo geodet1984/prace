@@ -20,6 +20,11 @@ a protože průměrná cena by tříletý test rozmazala na nesmysl.
 prodejní snižuje výnos. Vést je zvlášť a hlásit "zisk" bez nich je přesně
 ten druh čísla, kvůli kterému člověk obchoduje víc, než se mu vyplácí.
 
+*Hotovost se vede po měnách.* Kdo inkasuje dividendu v dolarech a nechá ji
+ležet, drží dál měnovou sázku — a evidence, která zná jen pozice, o ní neví.
+Zůstatky proto vznikají přehráním knihy (``cash``) a v korunovém ocenění se
+přepočítávají **dnešním** kurzem proti kurzu dne, kdy peníze přitekly.
+
 Peníze se počítají v ``float``, stejně jako ve zbytku projektu. Na evidenci
 řádu statisíců to stačí; zaokrouhluje se až při výpisu.
 
@@ -36,6 +41,9 @@ from __future__ import annotations
 
 import csv
 import logging
+import os
+import statistics
+import tempfile
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from enum import Enum
@@ -80,6 +88,14 @@ class TxType(str, Enum):
     DIVIDEND = "dividenda"
     TAX = "dan"
     FEE = "poplatek"
+    EXCHANGE = "smena"
+    """Převod mezi měnami. **Jeden řádek je jedna strana převodu**, takže
+    směna se zapisuje jako dvojice: ``-24 500 CZK`` a ``+1 000 USD``.
+
+    Vypadá to jako práce navíc, ale jinak by řádek nesl dvě měny a celá
+    kniha by musela mít druhý měnový sloupec. Navíc je díky tomu vidět
+    kurzový spread brokera: sečtou-li se obě strany kurzem ČNB toho dne,
+    nevyjde nula, ale přesně to, co si broker vzal."""
 
 
 #: Pohyby, které se vážou ke konkrétnímu titulu.
@@ -118,6 +134,10 @@ class Transaction:
                 raise LedgerError(f"{self.type.value} {self.symbol}: záporná cena")
         if self.fee < 0:
             raise LedgerError(f"záporný poplatek ({self.day})")
+        if self.type is TxType.EXCHANGE and not self.amount:
+            # Nulová strana směny je vždycky překlep — a tichá nula by
+            # z dvojice udělala jednostranný pohyb, tedy vyrobené peníze.
+            raise LedgerError(f"směna s nulovou částkou ({self.day})")
 
     @property
     def key(self) -> tuple:
@@ -190,11 +210,45 @@ class Realized:
         return self.sold - self.bought >= CASOVY_TEST
 
 
+#: Kolikanásobek obvyklé (mediánové) velikosti pohybu už je podezřelý.
+#: Dvacetinásobek projde jednorázovému velkému vkladu mezi drobnými nákupy,
+#: ale neprojde překlepu o řád — a právě ten hledáme.
+_SKOK = 20.0
+
+
+@dataclass(frozen=True)
+class Nalez:
+    """Jedna věc, která v knize nesedí.
+
+    ``zavaznost`` je ``"chyba"`` (kniha si odporuje sama se sebou) nebo
+    ``"podezreni"`` (může být v pořádku, ale stojí za ověření). Rozlišení
+    není kosmetika: kontrola, která hlásí i správné zápisy jako chybu, se
+    přestane číst — a s ní i ty skutečné.
+    """
+
+    zavaznost: str
+    den: date | None
+    zprava: str
+
+    def __str__(self) -> str:
+        znacka = "CHYBA " if self.zavaznost == "chyba" else "pozor "
+        return f"{znacka} {self.den or '':<12} {self.zprava}"
+
+
 @dataclass
 class Ledger:
     """Účetní kniha skutečného portfolia."""
 
     transactions: list[Transaction] = field(default_factory=list)
+
+    komentare: list[str] = field(default_factory=list)
+    """Řádky s ``#`` z hlavičky souboru. Držíme je proto, že vzor knihy je
+    z poloviny nápověda — a příkaz, který připíše jeden pohyb a přitom
+    smaže dokumentaci k formátu, si uživatel podruhé nespustí."""
+
+    oddelovac: str = ","
+    """Oddělovač, kterým soubor přišel. Přepsat českému Excelu středníky
+    na čárky znamená, že se mu kniha při dalším otevření rozsype."""
 
     # --- zápis ----------------------------------------------------------
 
@@ -242,7 +296,7 @@ class Ledger:
             line for line in text.splitlines() if not line.lstrip().startswith("#")
         ))
 
-        ledger = cls()
+        ledger = cls(komentare=_hlavickove_komentare(text), oddelovac=oddelovac)
         with path.open(encoding="utf-8", newline="") as handle:
             rows = (line for line in handle if not line.lstrip().startswith("#"))
             for line_no, row in enumerate(csv.DictReader(rows, delimiter=oddelovac), start=2):
@@ -271,26 +325,50 @@ class Ledger:
         )
 
     def to_csv(self, path: str | Path) -> None:
-        """Uloží knihu. Přepisuje celý soubor — je zdrojem pravdy."""
+        """Uloží knihu. Přepisuje celý soubor — je zdrojem pravdy.
+
+        Zapisuje se **do dočasného souboru vedle a teprve pak přejmenuje**.
+        Kdyby se psalo rovnou, stačí plný disk, Ctrl-C nebo výjimka uprostřed
+        a z evidence zbude půlka — přesně ten soubor, ze kterého se pak
+        nedá zjistit, co v něm chybělo. ``os.replace`` je na jednom svazku
+        atomický, takže na cílovém místě je vždycky buď stará, nebo celá
+        nová kniha.
+        """
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8", newline="") as handle:
-            writer = csv.writer(handle)
-            writer.writerow(self.SLOUPCE)
-            for tx in self.transactions:
-                writer.writerow(
-                    [
-                        tx.day.isoformat(),
-                        tx.type.value,
-                        tx.symbol or "",
-                        tx.quantity or "",
-                        tx.price or "",
-                        f"{tx.amount:.2f}",
-                        tx.fee or "",
-                        tx.currency,
-                        tx.note,
-                    ]
-                )
+        # Dočasný soubor musí být ve stejném adresáři: přes hranici svazku
+        # (/tmp vs. domovský adresář) přejmenování atomické není.
+        handle_fd, docasny = tempfile.mkstemp(
+            dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp"
+        )
+        try:
+            with open(handle_fd, "w", encoding="utf-8", newline="") as handle:
+                for radek in self.komentare:
+                    handle.write(radek.rstrip("\n") + "\n")
+                writer = csv.writer(handle, delimiter=self.oddelovac)
+                writer.writerow(self.SLOUPCE)
+                for tx in self.transactions:
+                    writer.writerow(
+                        [
+                            tx.day.isoformat(),
+                            tx.type.value,
+                            tx.symbol or "",
+                            _do_csv(tx.quantity),
+                            _do_csv(tx.price),
+                            f"{tx.amount:.2f}",
+                            _do_csv(tx.fee),
+                            tx.currency,
+                            tx.note,
+                        ]
+                    )
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(docasny, path)
+        except BaseException:
+            # I při Ctrl-C: nedopsaný soubor po sobě uklidit, ať se příště
+            # nepoznává, který ze dvou je ten pravý.
+            Path(docasny).unlink(missing_ok=True)
+            raise
 
     # --- výpočty --------------------------------------------------------
     #
@@ -384,6 +462,41 @@ class Ledger:
             ),
         }
 
+    @staticmethod
+    def _tok(tx: Transaction) -> float:
+        """Kolik peněz pohyb odčerpal nebo přinesl — v měně toho pohybu.
+
+        U nákupu a prodeje se **nepoužije sloupec ``amount``**, ale dopočte
+        se z počtu kusů, ceny a poplatku. Je to schválně: přesně takhle
+        vzniká i pořizovací cena dávky a výnos z prodeje, takže zůstatek
+        hotovosti a pořizovací cena drží pohromadě. Kdyby se hotovost brala
+        z ``amount``, stačí, aby broker ve výpisu uváděl částku bez poplatku
+        (a někteří ano), a zůstatek by se rozcházel o poplatky — pomalu
+        a nepozorovaně.
+        """
+        if tx.type is TxType.BUY:
+            return -(tx.quantity * tx.price + tx.fee)
+        if tx.type is TxType.SELL:
+            return tx.quantity * tx.price - tx.fee
+        return tx.amount
+
+    def cash(self) -> dict[str, float]:
+        """Zůstatek hotovosti po měnách — doslova to, co je v knize.
+
+        Nic nedopočítává a nic nenarovnává: chybí-li v knize zápis směny,
+        vyjde dolarový zůstatek záporný. Je to užitečné, ne vadné — přesně
+        tak se pozná neúplná kniha (viz ``kontrola``). Korunové ocenění si
+        pak chybějící směnu dopočte samo, protože bez ní by nešlo spočítat
+        vůbec nic.
+        """
+        out: dict[str, float] = {}
+        for tx in self.transactions:
+            mena = (tx.currency or "").upper()
+            out[mena] = out.get(mena, 0.0) + self._tok(tx)
+        # Nuly z vyrovnaných měn jen zaplevelují výpis; drobný zbytek
+        # z plovoucí čárky není zůstatek, ale zaokrouhlovací šum.
+        return {m: z for m, z in out.items() if abs(z) > 1e-9}
+
     def valuation(self, prices: dict[str, float]) -> dict:
         """Ocenění portfolia k daným cenám.
 
@@ -433,6 +546,10 @@ class Ledger:
             # ^ součet přesně těch položek, které výpis ukazuje nad čarou
             "pozic": len({lot.symbol for lot in lots}),
             "bez_ceny": sorted(set(bez_ceny)),
+            # Hotovost jen informativně: v jedné měně žádný kurzový rozdíl
+            # nevzniká, takže na "celkem" nemá co měnit. Přepočet drženého
+            # dolaru na koruny umí až ``valuation_czk``.
+            "hotovost": self.cash(),
         }
 
     # --- ocenění v korunách ---------------------------------------------
@@ -472,12 +589,18 @@ class Ledger:
         Ta volba není jediná možná a je dobré o ní vědět; podstatné je, že
         se obě části sečtou přesně na celek a ani koruna se nepočítá dvakrát.
 
-        Co tenhle výpočet **neumí**: dividendu inkasovanou v dolarech
-        a v dolarech ponechanou. Kniha nevede zůstatek hotovosti po měnách,
-        takže takový pohyb přepočte kurzem dne, kdy přišel, a další pohyb
-        kurzu na nevyměněné hotovosti nevidí. U reinvestovaných dividend
-        to nevadí (nákup má vlastní datum a kurz), u hromadící se hotovosti
-        ano.
+        **Hotovost je součástí výsledku.** Nevyměněná dolarová hotovost je pořád
+        měnová sázka, takže se přeceňuje dnešním kurzem proti kurzu dne, kdy
+        přitekla; rozdíl je v ``kurzovy_rozdil_hotovosti``. Bez toho by
+        dividenda inkasovaná v dolarech a ponechaná v dolarech ztuhla na
+        kurzu dne výplaty a další pohyb kurzu by na ní nebyl vidět.
+
+        Celý výpočet stojí na jedné identitě, kterou hlídá test::
+
+            celkem == hodnota pozic + hotovost − vloženo
+
+        a ``celkem`` je zároveň součet položek, které výpis ukazuje nad
+        čarou. Kdyby se rozešly, je někde peníz započtený dvakrát.
         """
         k_datu = k_datu or date.today()
         lots, realized = self._prehraj()
@@ -556,6 +679,7 @@ class Ledger:
             real_kurz += obchod.proceeds * (kurz_prodej - kurz_nakup)
 
         toky = self._toky_czk(prepocet)
+        hotovost = self._hotovost_czk(prepocet, k_datu, domaci)
         nerealizovany = hodnota - porizovaci
 
         return {
@@ -570,12 +694,23 @@ class Ledger:
             "poplatky": toky["poplatky_mimo_obchody"],
             "poplatky_v_obchodech": toky["poplatky_v_obchodech"],
             "vlozeno": toky["vlozeno"],
+            # Kurzový rozdíl na nevyměněné hotovosti a spread ze zapsaných
+            # směn. Obojí jsou skutečné koruny, takže patří do "celkem" —
+            # a s nimi platí identita
+            #     celkem == hodnota pozic + hotovost − vloženo.
+            "hotovost": hotovost["hotovost"],
+            "hotovost_meny": hotovost["hotovost_meny"],
+            "kurzovy_rozdil_hotovosti": hotovost["kurzovy_rozdil_hotovosti"],
+            "smeny": hotovost["smeny"],
+            "dopoctene_smeny": hotovost["dopoctene_smeny"],
             "celkem": (
                 nerealizovany
                 + realizovany
                 + toky["dividendy"]
                 + toky["dane"]
                 + toky["poplatky_mimo_obchody"]
+                + hotovost["smeny"]
+                + hotovost["kurzovy_rozdil_hotovosti"]
             ),
             # Druhý rozpad **téhož** zhodnocení z pozic — podle příčiny, ne
             # podle druhu. Tyhle dvě položky se sčítají na (nerealizovaný +
@@ -594,6 +729,97 @@ class Ledger:
             # Měny, pro které kurz nebyl. Jejich pohyby v součtech **nejsou** —
             # radši chybějící řádek než tichý přepočet kurzem 1:1.
             "bez_kurzu": sorted(bez_kurzu),
+        }
+
+    def _hotovost_czk(self, prepocet, k_datu: date, domaci: str) -> dict:
+        """Hotovost po měnách, přeceněná dnešním kurzem.
+
+        Vrací dvě čísla, na kterých stojí oprava staré díry:
+
+        * ``hotovost`` — kolik korun by dnes bylo, kdyby se všechny zůstatky
+          vyměnily za koruny;
+        * ``kurzovy_rozdil_hotovosti`` — rozdíl proti tomu, kolik korun ty
+          peníze představovaly **v den, kdy přitekly**. Přesně tenhle kus
+          výsledku dřív chyběl: dolarová dividenda ponechaná v dolarech
+          ztuhla na kurzu dne výplaty.
+
+        **Chybějící směna se dopočítá.** Kdo si vede knihu poctivě, zapíše
+        i převod korun na dolary (``TxType.EXCHANGE``). Kdo ne, má dolarový
+        zůstatek v mínusu — dolary utratil, ale nikdy je "nekoupil". Takový
+        schodek se tady dorovná převodem z domácí měny kurzem ČNB toho dne.
+        Je to volba mezi dvěma nedokonalostmi a tahle je ta menší:
+
+        * dopočet je z definice **korunově neutrální** (odečte přesně tolik
+          korun, kolik chybějící cizí měna toho dne stála), takže výsledek
+          neúplné knihy vyjde stejně jako dřív a nikomu se čísla nezmění;
+        * bez dopočtu by záporný zůstatek dolarů znamenal, že kniha tvrdí,
+          že dolary dlužíte — a při poklesu dolaru by z toho spočítala
+          **zisk** z krátké pozice, kterou nikdo nikdy nedržel.
+
+        Kolikrát se dopočítávalo, se hlásí v ``dopoctene_smeny``; ``kontrola``
+        na to upozorní, protože je to známka neúplné knihy, ne stav věcí.
+        """
+        domaci = domaci.upper()
+        meny = {(t.currency or domaci).upper() for t in self.transactions} | {domaci}
+        # Měna bez dnešního kurzu do hotovostních součtů nevstupuje vůbec —
+        # stejně jako u pozic. Půlka přepočtu je horší než žádný.
+        kurzy_dnes = {}
+        for mena in sorted(meny):
+            kurz = prepocet(mena, k_datu)
+            if kurz is not None:
+                kurzy_dnes[mena] = kurz
+
+        zustatky: dict[str, float] = {}
+        historicky = 0.0
+        smeny = 0.0
+        dopoctene: list[dict] = []
+
+        # Uvnitř jednoho dne kniha pořadí pohybů nezná. Připsat dřív než
+        # odepsat je bezpečnější volba: jinak by nákup zaplacený z peněz,
+        # které týž den přišly, vypadal jako přečerpaný účet a dopočítal by
+        # se převod, který se nikdy nestal. Na součty to nemá vliv (dopočet
+        # je korunově neutrální), jen na počet hlášení.
+        for tx in sorted(self.transactions, key=lambda t: (t.day, self._tok(t) <= 0)):
+            mena = (tx.currency or domaci).upper()
+            kurz = prepocet(mena, tx.day) if mena in kurzy_dnes else None
+            if kurz is None:
+                continue
+
+            tok = self._tok(tx)
+            historicky += tok * kurz
+            if tx.type is TxType.EXCHANGE:
+                # V měně zápisu se obě strany směny sečtou na nesmysl,
+                # v korunách přesně na to, co si broker vzal za převod.
+                smeny += tx.amount * kurz
+            zustatky[mena] = zustatky.get(mena, 0.0) + tok
+
+            if mena != domaci and zustatky[mena] < -1e-9:
+                chybi = -zustatky[mena]
+                zustatky[mena] = 0.0
+                zustatky[domaci] = zustatky.get(domaci, 0.0) - chybi * kurz
+                dopoctene.append(
+                    {"den": tx.day.isoformat(), "mena": mena, "kolik": chybi, "kurz": kurz}
+                )
+
+        dnes = sum(zustatek * kurzy_dnes[mena] for mena, zustatek in zustatky.items())
+        return {
+            "hotovost": dnes,
+            "kurzovy_rozdil_hotovosti": dnes - historicky,
+            "smeny": smeny,
+            "hotovost_meny": sorted(
+                (
+                    {
+                        "mena": mena,
+                        "zustatek": zustatek,
+                        "kurz_dnes": kurzy_dnes[mena],
+                        "hodnota": zustatek * kurzy_dnes[mena],
+                    }
+                    for mena, zustatek in zustatky.items()
+                    if abs(zustatek) > 1e-9
+                ),
+                key=lambda z: -abs(z["hodnota"]),
+            ),
+            "dopoctene_smeny": dopoctene,
         }
 
     def _toky_czk(self, prepocet) -> dict[str, float]:
@@ -653,6 +879,168 @@ class Ledger:
                 out[mena] = kurz
         return out
 
+    # --- kontrola knihy --------------------------------------------------
+
+    def kontrola(self, k_datu: date | None = None, domaci: str = "CZK") -> list[Nalez]:
+        """Projde knihu a vrátí, co v ní nesedí.
+
+        Účetní kniha je psaná ručně a chyba v ní se pozná pozdě — typicky
+        až u daňového přiznání nebo když se přehled začne rozcházet
+        s výpisem od brokera. Tahle funkce hledá právě ty chyby, které jdou
+        udělat překlepem a **nespadnou**: prodej titulu, který kniha nezná,
+        dividendu u nedržené pozice, přečerpanou hotovost, datum
+        v budoucnosti a částku o řád vedle.
+
+        Nálezy jsou dvojího druhu. ``chyba`` znamená, že kniha si sama se
+        sebou odporuje a spočítaná čísla nedávají smysl. ``podezreni`` je
+        věc, která **může** být v pořádku — dividenda po prodeji celé
+        pozice se stává (rozhodný den byl dřív) a jednorázový velký vklad
+        taky. Proto se nezamítá, jen ukazuje; kontrola, která křičí i na
+        správné zápisy, se za týden vypne.
+        """
+        k_datu = k_datu or date.today()
+        nalezy: list[Nalez] = []
+        nalezy += self._kontrola_data(k_datu)
+        nalezy += self._kontrola_pozic()
+        nalezy += self._kontrola_hotovosti(domaci)
+        nalezy += self._kontrola_castek()
+        return sorted(nalezy, key=lambda n: (n.den or date.min, n.zprava))
+
+    def _kontrola_data(self, k_datu: date) -> list[Nalez]:
+        """Datum v budoucnosti. Skoro vždycky přehozený rok nebo den a měsíc.
+
+        Nechat to projít znamená ocenit pozici kurzem, který ještě nebyl
+        vyhlášen, a časový test spustit od data, které nenastalo.
+        """
+        return [
+            Nalez("chyba", tx.day, f"{tx.type.value} {tx.symbol or ''} má datum v budoucnosti")
+            for tx in self.transactions
+            if tx.day > k_datu
+        ]
+
+    def _kontrola_pozic(self) -> list[Nalez]:
+        """Prodeje a dividendy proti tomu, co kniha v ten den eviduje."""
+        nalezy: list[Nalez] = []
+        drzeno: dict[str, float] = {}
+        for tx in self.transactions:
+            if tx.type is TxType.BUY:
+                drzeno[tx.symbol] = drzeno.get(tx.symbol, 0.0) + tx.quantity
+            elif tx.type is TxType.SELL:
+                mam = drzeno.get(tx.symbol, 0.0)
+                if tx.quantity > mam + 1e-9:
+                    kolik = (
+                        "kniha ho nikdy nekoupila"
+                        if mam <= 1e-9
+                        else f"kniha eviduje jen {mam:g} ks"
+                    )
+                    nalezy.append(
+                        Nalez(
+                            "chyba",
+                            tx.day,
+                            f"prodej {tx.quantity:g} ks {tx.symbol}, ale {kolik}",
+                        )
+                    )
+                drzeno[tx.symbol] = max(0.0, mam - tx.quantity)
+            elif tx.type is TxType.DIVIDEND and drzeno.get(tx.symbol, 0.0) <= 1e-9:
+                nalezy.append(
+                    Nalez(
+                        "podezreni",
+                        tx.day,
+                        f"dividenda {tx.symbol}, ale ten den podle knihy titul nedržíte "
+                        "(může být v pořádku, byl-li rozhodný den před prodejem)",
+                    )
+                )
+        return nalezy
+
+    def _kontrola_hotovosti(self, domaci: str) -> list[Nalez]:
+        """Záporný zůstatek hotovosti — a rozlišuje se, v které měně.
+
+        Mínus v domácí měně znamená, že kniha utrácí peníze, které do ní
+        nikdo nevložil: chybí vklad. Mínus v cizí měně je něco jiného —
+        typicky chybějící zápis směny, protože korun se koupily dolary
+        a nikdo to nezapsal. Splácat obojí do jedné hlášky by vedlo
+        k hledání chybějícího vkladu tam, kde chybí převod.
+        """
+        domaci = domaci.upper()
+        nalezy: list[Nalez] = []
+        zustatky: dict[str, float] = {}
+        nahlaseno: set[str] = set()
+        for tx in sorted(self.transactions, key=lambda t: (t.day, self._tok(t) <= 0)):
+            mena = (tx.currency or domaci).upper()
+            zustatky[mena] = zustatky.get(mena, 0.0) + self._tok(tx)
+            if zustatky[mena] >= -1e-9 or mena in nahlaseno:
+                continue
+            nahlaseno.add(mena)
+            if mena == domaci:
+                nalezy.append(
+                    Nalez(
+                        "chyba",
+                        tx.day,
+                        f"zůstatek {mena} klesl na {zustatky[mena]:,.2f} — v knize chybí vklad",
+                    )
+                )
+            else:
+                nalezy.append(
+                    Nalez(
+                        "podezreni",
+                        tx.day,
+                        f"zůstatek {mena} klesl na {zustatky[mena]:,.2f} — chybí nejspíš zápis "
+                        f"směny (typ smena). Přehled si převod dopočítá kurzem ČNB toho dne, "
+                        "ale kurz, který jste dostali od brokera, byl jiný",
+                    )
+                )
+        return nalezy
+
+    def _kontrola_castek(self) -> list[Nalez]:
+        """Částky, které nesedí — překlep o řád a rozpor mezi sloupci."""
+        nalezy: list[Nalez] = []
+
+        for tx in self.transactions:
+            if tx.type not in (TxType.BUY, TxType.SELL) or not tx.amount:
+                continue
+            ocekavano = tx.quantity * tx.price
+            # Tolerance pokrývá obě konvence, které brokeři používají:
+            # částku s poplatkem i bez něj. Půl procenta navíc je na
+            # zaokrouhlení kurzu a haléře — ne na překlep o řád.
+            dovoleno = tx.fee + max(0.02, 0.005 * ocekavano)
+            if abs(abs(tx.amount) - ocekavano) > dovoleno:
+                nalezy.append(
+                    Nalez(
+                        "podezreni",
+                        tx.day,
+                        f"{tx.type.value} {tx.symbol}: {tx.quantity:g} × {tx.price:g} = "
+                        f"{ocekavano:,.2f}, ale amount je {tx.amount:,.2f}",
+                    )
+                )
+
+        # Pohyb o řád vedle. Medián, ne průměr: jeden překlep by průměr
+        # zvedl tak, že by se sám schoval pod práh.
+        podle_meny: dict[str, list[Transaction]] = {}
+        for tx in self.transactions:
+            podle_meny.setdefault((tx.currency or "").upper(), []).append(tx)
+        for mena, pohyby in podle_meny.items():
+            castky = [abs(self._tok(tx)) for tx in pohyby if abs(self._tok(tx)) > 1e-9]
+            if len(castky) < 5:
+                # Na třech pohybech je "obvyklá velikost" statistika o ničem
+                # a každý druhý zápis by byl podezřelý.
+                continue
+            median = statistics.median(castky)
+            if median <= 0:
+                continue
+            for tx in pohyby:
+                castka = abs(self._tok(tx))
+                if castka > _SKOK * median:
+                    nalezy.append(
+                        Nalez(
+                            "podezreni",
+                            tx.day,
+                            f"{tx.type.value} {tx.symbol or ''} {castka:,.2f} {mena} je "
+                            f"{castka / median:.0f}× nad obvyklou velikostí pohybu "
+                            f"({median:,.2f} {mena}) — nepřebývá nula?",
+                        )
+                    )
+        return nalezy
+
     def tax_clock(self, k_datu: date | None = None) -> list[dict]:
         """Kdy která dávka projde časovým testem.
 
@@ -677,6 +1065,36 @@ class Ledger:
         return sorted(out, key=lambda r: r["osvobozeno_od"])
 
 
+def _do_csv(hodnota: float) -> str:
+    """Číslo do buňky bez zbytečného ocasu.
+
+    ``str(2.0)`` je "2.0" a při každém přepsání knihy by se ručně napsaná
+    dvojka změnila na dvojku s desetinnou nulou. Ve verzovaném souboru to
+    dělá hluk v diffu, ve kterém se ztratí skutečná změna. Deset platných
+    číslic je nad rámec všeho, co se v knize vyskytne, takže se nic
+    nezaokrouhlí.
+    """
+    return f"{hodnota:.10g}" if hodnota else ""
+
+
+def _hlavickove_komentare(text: str) -> list[str]:
+    """Komentářové řádky z hlavičky souboru, aby přežily přepsání knihy.
+
+    Vzor knihy je z poloviny nápověda k formátu. Příkaz, který připíše jeden
+    pohyb a přitom tu nápovědu smaže, uživatele naučí, že se knihy raději
+    nemá dotýkat.
+    """
+    hlavicka: list[str] = []
+    for radek in text.splitlines():
+        # Prázdný řádek uvnitř hlavičky ano, před ní ne — jinak by se
+        # "hlavičkou" stal každý soubor začínající prázdným řádkem.
+        if radek.lstrip().startswith("#") or (not radek.strip() and hlavicka):
+            hlavicka.append(radek)
+        else:
+            break
+    return hlavicka
+
+
 def merge(ledger: Ledger, txs: list[Transaction]) -> tuple[Ledger, int, int]:
     """Přimíchá pohyby do knihy bez zdvojení.
 
@@ -685,6 +1103,10 @@ def merge(ledger: Ledger, txs: list[Transaction]) -> tuple[Ledger, int, int]:
     přepsat evidenci a až potom zjistit, že výpis byl špatný, je nehoda,
     ze které se špatně vrací.
     """
-    nova = Ledger(transactions=[replace(t) for t in ledger.transactions])
+    nova = Ledger(
+        transactions=[replace(t) for t in ledger.transactions],
+        komentare=list(ledger.komentare),
+        oddelovac=ledger.oddelovac,
+    )
     pridano = nova.extend(txs)
     return nova, pridano, len(txs) - pridano
