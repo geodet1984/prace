@@ -10,12 +10,14 @@ import json
 import threading
 import urllib.error
 import urllib.request
+from datetime import date
 
 import pytest
 
 from trading import dashboard, strategies
 from trading import data as data_module
 from trading.execution import ZERO_COST
+from trading.fx import KurzyPodleDne
 from trading.live import PaperTrader, make_config
 from trading.risk import RiskConfig
 
@@ -207,6 +209,167 @@ def test_unknown_path_is_404(server):
     with pytest.raises(urllib.error.HTTPError) as chyba:
         urllib.request.urlopen(f"{url}/api/neexistuje")
     assert chyba.value.code == 404
+
+
+# --- skutečné portfolio -------------------------------------------------
+#
+# Kniha je volitelná. Tyhle testy hlídají hlavně to, že její nepřítomnost,
+# rozbitost ani chybějící síť nesmí shodit zbytek přehledu — a že ani
+# u ní není dashboard druhá cesta, jak něčím hnout.
+
+KNIHA_USD = (
+    "day,type,symbol,quantity,price,amount,fee,currency,note\n"
+    "2024-01-02,vklad,,,,2000.00,,USD,vklad\n"
+    "2024-01-02,nakup,X,1,100.00,-100.00,0,USD,\n"
+)
+
+KURZY_TEST = KurzyPodleDne({("USD", date(2024, 1, 2)): 20.0, ("USD", date(2026, 1, 2)): 18.0})
+
+
+@pytest.fixture(autouse=True)
+def bez_pameti():
+    """Přehled portfolia se memoizuje kvůli síti; mezi testy to musí zmizet."""
+    dashboard._PORTFOLIO_MEMO.clear()
+    yield
+    dashboard._PORTFOLIO_MEMO.clear()
+
+
+@pytest.fixture
+def kniha(tmp_path):
+    cesta = tmp_path / "portfolio.csv"
+    cesta.write_text(KNIHA_USD, encoding="utf-8")
+    return cesta
+
+
+@pytest.fixture
+def server_s_knihou(ucet, kniha, monkeypatch):
+    """Server s knihou a bez sítě — ceny i kurzy jsou podstrčené.
+
+    Test, který sahá na Yahoo a ČNB, padá podle stavu připojení a začne
+    se přeskakovat. Obě místa, kudy vede síť, jsou proto zaslepená.
+    """
+    monkeypatch.setattr(dashboard, "_ceny_pozic", lambda symbols: {"X": 110.0})
+    monkeypatch.setattr(
+        dashboard.fx_module, "Kurzovnik", lambda *a, **kw: KURZY_TEST  # noqa: ARG005
+    )
+    httpd = dashboard.make_server(ucet, port=0, ledger_path=kniha)
+    vlakno = threading.Thread(target=httpd.serve_forever, daemon=True)
+    vlakno.start()
+    yield f"http://127.0.0.1:{httpd.server_address[1]}", kniha
+    httpd.shutdown()
+    httpd.server_close()
+    vlakno.join(timeout=5)
+
+
+def test_portfolio_rozdeluje_zhodnoceni_na_aktivum_a_kurz(kniha):
+    """Endpoint musí nést obě půlky rozpadu, ne jen výsledek.
+
+    Bez nich je korunové číslo zavádějící: růst titulu a pohyb kurzu se
+    v součtu vyruší a stránka ukáže nulu bez vysvětlení.
+    """
+    snap = dashboard.portfolio_snapshot(
+        kniha, prices={"X": 110.0}, kurzovnik=KURZY_TEST, k_datu=date(2026, 1, 2)
+    )
+    v = snap["prehled"]
+
+    assert v["vykon_aktiva"] == pytest.approx(200.0)
+    assert v["kurzovy_rozdil"] == pytest.approx(-220.0)
+    assert v["vykon_aktiva"] + v["kurzovy_rozdil"] == pytest.approx(
+        v["nerealizovany_zisk"] + v["realizovany_zisk"]
+    )
+    assert any("kurz" in u for u in snap["upozorneni"]), "vyrušení kurzem se má říct nahlas"
+
+
+def test_portfolio_snapshot_is_json_serialisable(kniha):
+    """Datum ani NaN v JSONu neprojdou a stránka by zůstala prázdná bez hlášky."""
+    snap = dashboard.portfolio_snapshot(
+        kniha, prices={"X": 110.0}, kurzovnik=KURZY_TEST, k_datu=date(2026, 1, 2)
+    )
+    json.dumps(snap, allow_nan=False)
+
+
+def test_bez_knihy_je_oddil_prazdny_ne_chyba(server):
+    """Většina lidí skutečné portfolio nevede. Nevedená kniha není chyba.
+
+    404 by v konzoli prohlížeče vypadalo jako rozbitý dashboard a svádělo
+    k hledání závady, která žádná není.
+    """
+    url, _ = server
+    with urllib.request.urlopen(f"{url}/api/portfolio") as odpoved:
+        payload = json.loads(odpoved.read())
+    assert payload["vedena"] is False
+    assert payload["duvod"]
+
+
+def test_neexistujici_kniha_neshodi_dashboard(ucet, tmp_path):
+    """Zadaná, ale chybějící cesta je provozní stav, ne pád."""
+    payload = dashboard._portfolio_payload(tmp_path / "nikde.csv")
+    assert payload["vedena"] is False
+    assert "neexistuje" in payload["duvod"]
+
+
+def test_rozbita_kniha_neshodi_zbytek_prehledu(ucet, tmp_path):
+    """Překlep v CSV je chyba uživatele, ne serveru — papírový účet musí dál fungovat."""
+    cesta = tmp_path / "portfolio.csv"
+    cesta.write_text(
+        "day,type,symbol,quantity,price,amount,fee,currency,note\n2024-01-02,zaklinadlo,,,,1,,CZK,\n",
+        encoding="utf-8",
+    )
+    payload = dashboard._portfolio_payload(cesta)
+    assert payload["vedena"] is False
+
+
+def test_server_serves_portfolio(server_s_knihou):
+    url, _ = server_s_knihou
+    with urllib.request.urlopen(f"{url}/api/portfolio") as odpoved:
+        payload = json.loads(odpoved.read())
+    assert payload["vedena"] is True
+    assert payload["prehled"]["kurzovy_rozdil"] == pytest.approx(-220.0)
+
+
+@pytest.mark.parametrize("metoda", ["POST", "PUT", "DELETE", "PATCH"])
+def test_portfolio_endpoint_je_taky_jen_ke_cteni(server_s_knihou, metoda):
+    """Nová cesta nesmí být dírou v pravidle, které platí pro celý dashboard.
+
+    Účetní kniha je soubor uživatele; kdyby přes ni šlo psát, byl by
+    přehled cestou, jak si přepsat vlastní evidenci z prohlížeče.
+    """
+    url, kniha = server_s_knihou
+    pred = kniha.read_bytes()
+
+    zadost = urllib.request.Request(f"{url}/api/portfolio", data=b"{}", method=metoda)
+    with pytest.raises(urllib.error.HTTPError) as chyba:
+        urllib.request.urlopen(zadost)
+
+    assert chyba.value.code == 405
+    assert kniha.read_bytes() == pred
+
+
+def test_cteni_prehledu_knihu_nemeni(server_s_knihou):
+    """Ani čtení nesmí do knihy sáhnout — je to evidence, ne pracovní soubor."""
+    url, kniha = server_s_knihou
+    pred, mtime = kniha.read_bytes(), kniha.stat().st_mtime
+
+    for cesta in ("/", "/api/prehled", "/api/portfolio", "/api/verze"):
+        urllib.request.urlopen(f"{url}{cesta}").read()
+
+    assert kniha.read_bytes() == pred
+    assert kniha.stat().st_mtime == mtime
+
+
+def test_verze_sleduje_i_knihu(server_s_knihou):
+    """Dopsaný obchod se má projevit stejně jako pohyb účtu.
+
+    Bez otisku knihy by stránka ukazovala staré portfolio, dokud by ji
+    někdo ručně neobnovil — a nikdo by nepoznal proč.
+    """
+    url, kniha = server_s_knihou
+    pred = json.loads(urllib.request.urlopen(f"{url}/api/verze").read())
+
+    kniha.write_text(KNIHA_USD + "2024-02-02,poplatek,,,,-10.00,,USD,\n", encoding="utf-8")
+
+    po = json.loads(urllib.request.urlopen(f"{url}/api/verze").read())
+    assert po["kniha"] != pred["kniha"]
 
 
 def test_missing_state_reports_503_not_crash(tmp_path):

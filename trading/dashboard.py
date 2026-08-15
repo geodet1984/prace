@@ -14,16 +14,27 @@ a s ``/api/verze`` se stránka obnoví sama.
 
 Poslouchá se jen na loopbacku. Stav účtu je soukromá věc a vystavovat
 ho do sítě není důvod.
+
+Kromě papírového účtu umí stránka ukázat i **skutečné portfolio** z účetní
+knihy (``ledger.py``), pokud se cesta k ní předá přes ``--kniha``. Jsou to
+dvě různé věci na jedné stránce schválně: papírový účet ukazuje, co by
+strategie udělala, kniha to, co jste udělali vy. Kniha je volitelná a její
+nepřítomnost nesmí přehled shodit — většina uživatelů skutečné portfolio
+takhle nevede a prázdný oddíl je lepší než chybová stránka.
 """
 
 from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
+import time
+from datetime import date, datetime
 from functools import partial
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+from . import fx as fx_module
+from . import ledger as ledger_module
 
 logger = logging.getLogger(__name__)
 
@@ -262,6 +273,177 @@ def _warnings(state: dict, positions: list[dict], equity: float, peak: float) ->
     return out
 
 
+# --- skutečné portfolio -------------------------------------------------
+#
+# Druhá polovina stránky. Papírový účet výš je hypotéza; tohle jsou peníze.
+
+#: Jak dlouho se drží spočítaný přehled portfolia, než se přepočítá.
+#: Ceny i kurzy se tahají ze sítě a stránka se ptá po sekundách — bez
+#: tohohle by jedno otevřené okno bombardovalo Yahoo i ČNB.
+PORTFOLIO_TTL_S = 600.0
+
+_PORTFOLIO_MEMO: dict[tuple, tuple[float, dict]] = {}
+
+
+def _ceny_pozic(symbols: list[str]) -> dict[str, float]:
+    """Poslední známé závěrečné ceny držených titulů.
+
+    Chybějící cena není chyba: kniha smí obsahovat titul, který Yahoo
+    nezná (třeba evropský UCITS pod jiným tickerem). Ocení se pak
+    pořizovací cenou a evidence to přizná — viz ``Ledger.valuation``.
+    """
+    from . import data as data_module
+
+    ceny: dict[str, float] = {}
+    for symbol in symbols:
+        try:
+            df = data_module.fetch(symbol)
+            ceny[symbol] = float(df["close"].iloc[-1])
+        except Exception as exc:  # noqa: BLE001 - přehled nesmí spadnout kvůli ceně
+            logger.warning("%s: cenu se nepodařilo zjistit (%s)", symbol, exc)
+    return ceny
+
+
+def portfolio_snapshot(
+    path: str | Path,
+    *,
+    prices: dict[str, float] | None = None,
+    kurzovnik=None,
+    k_datu: date | None = None,
+) -> dict:
+    """Přehled skutečného portfolia v korunách.
+
+    ``prices`` a ``kurzovnik`` se dají předat zvenčí — testy tak nesahají
+    na síť a výsledek je dán jen obsahem knihy.
+    """
+    path = Path(path)
+    kniha = ledger_module.Ledger.from_csv(path)
+    k_datu = k_datu or date.today()
+
+    drzeno = kniha.holdings()
+    if prices is None:
+        prices = _ceny_pozic(sorted(drzeno))
+
+    if kurzovnik is None:
+        kurzovnik = fx_module.Kurzovnik()
+        cizi = {(t.currency or "").upper() for t in kniha.transactions} - {fx_module.DOMACI_MENA}
+        if cizi:
+            # Kurzy dopředu, ať se prohlížeč nedívá do prázdna, než doběhne
+            # dvacet dotazů na ČNB uvnitř výpočtu. Kniha vedená jen
+            # v korunách se přitom ČNB nezeptá vůbec — přepočet 1:1 nikdo
+            # potvrzovat nemusí.
+            kurzovnik.predehraj([t.day for t in kniha.transactions] + [k_datu])
+
+    v = kniha.valuation_czk(prices, kurzovnik, k_datu=k_datu)
+    hodiny = kniha.tax_clock(k_datu=k_datu)
+    nahrady = dict(getattr(kurzovnik, "nahrady", {}))
+
+    return {
+        "vedena": True,
+        "soubor": str(path),
+        "pohybu": len(kniha.transactions),
+        "prehled": v,
+        "casovy_test": [
+            {
+                **r,
+                "nakoupeno": r["nakoupeno"].isoformat(),
+                "osvobozeno_od": r["osvobozeno_od"].isoformat(),
+            }
+            for r in hodiny
+        ],
+        # Kolik dat se muselo nahradit starším kurzovním lístkem. Nenulové
+        # číslo znamená "běželo se bez sítě a čísla jsou přibližná".
+        "nahrazenych_kurzu": len(nahrady),
+        "upozorneni": _portfolio_warnings(v, hodiny, nahrady, k_datu),
+    }
+
+
+def _koruny(castka: float, mena: str) -> str:
+    """Částka česky — mezera jako oddělovač tisíců, ne čárka."""
+    return f"{castka:,.0f}".replace(",", " ") + f" {mena}"
+
+
+def _portfolio_warnings(v: dict, hodiny: list[dict], nahrady: dict, k_datu: date) -> list[str]:
+    """Věci, kvůli kterým je korunové číslo jiné, než se na první pohled zdá."""
+    out: list[str] = []
+
+    aktivum, kurz = v["vykon_aktiva"], v["kurzovy_rozdil"]
+    # Tohle je celý důvod, proč se kurz vůbec rozpadá. Kdo vydělal na titulu
+    # a přišel o to na kurzu, vidí v součtu skoro nulu a bez rozpadu si
+    # myslí, že se nestalo nic.
+    if aktivum * kurz < 0 and abs(kurz) > 0.3 * abs(aktivum):
+        vydelaly = "vydělaly" if aktivum >= 0 else "prodělaly"
+        smer = "ubral" if kurz < 0 else "přidal"
+        out.append(
+            f"Tituly samy {vydelaly} {_koruny(abs(aktivum), v['mena'])}, ale pohyb kurzu {smer} "
+            f"{_koruny(abs(kurz), v['mena'])}. Bez rozpadu by výsledek vypadal jako výkon "
+            "strategie, a přitom je z velké části měnový."
+        )
+    elif abs(kurz) > abs(aktivum) and abs(kurz) > 0:
+        out.append(
+            f"Na výsledku se podepsal kurz ({_koruny(kurz, v['mena'])}) víc než samotné tituly "
+            f"({_koruny(aktivum, v['mena'])}) — držíte spíš měnovou sázku než akciovou."
+        )
+
+    if v["bez_kurzu"]:
+        out.append(
+            f"Bez kurzu: {', '.join(v['bez_kurzu'])}. Pohyby v těchhle měnách nejsou "
+            "v součtech vůbec — radši chybějící řádek než přepočet kurzem 1:1."
+        )
+
+    if v["bez_ceny"]:
+        out.append(
+            f"Bez aktuální ceny, oceněno pořizovací: {', '.join(v['bez_ceny'])}. "
+            "Nerealizovaný zisk je u nich z definice nula, ne skutečnost."
+        )
+
+    if nahrady:
+        nejstarsi = min(nahrady.values())
+        out.append(
+            f"U {len(nahrady)} dat nebyl kurz k dispozici a použil se starší lístek "
+            f"(nejstarší z {nejstarsi}). Bez sítě jsou korunová čísla přibližná."
+        )
+
+    blizko = [r for r in hodiny if not r["splneno"] and r["dni_zbyva"] <= 90]
+    if blizko:
+        nejblizsi = min(blizko, key=lambda r: r["dni_zbyva"])
+        out.append(
+            f"{nejblizsi['symbol']}: tříletý časový test dobíhá za {nejblizsi['dni_zbyva']} dní "
+            f"({nejblizsi['osvobozeno_od']}). Není to daňové poradenství, jen rozdíl dat."
+        )
+
+    return out
+
+
+def _portfolio_payload(path: Path | None) -> dict:
+    """Odpověď pro ``/api/portfolio`` včetně případu "kniha se nevede".
+
+    Nevedená kniha **není chyba** — je to výchozí stav. Vrací se proto
+    200 s ``vedena: false`` a stránka oddíl prostě neukáže; 404 by
+    v konzoli prohlížeče vypadalo jako rozbitý dashboard.
+    """
+    if path is None:
+        return {"vedena": False, "duvod": "kniha se nevede — spusťte s --kniha data/portfolio.csv"}
+    if not path.exists():
+        return {"vedena": False, "duvod": f"kniha {path} neexistuje"}
+
+    klic = (str(path), path.stat().st_mtime, date.today().isoformat())
+    hotovo = _PORTFOLIO_MEMO.get(klic)
+    if hotovo and time.monotonic() - hotovo[0] < PORTFOLIO_TTL_S:
+        return hotovo[1]
+
+    try:
+        payload = portfolio_snapshot(path)
+    except ledger_module.LedgerError as exc:
+        # Rozbitá kniha je chyba uživatele v CSV, ne pád serveru. Zbytek
+        # stránky (papírový účet) musí dál fungovat.
+        return {"vedena": False, "duvod": str(exc)}
+
+    _PORTFOLIO_MEMO.clear()
+    _PORTFOLIO_MEMO[klic] = (time.monotonic(), payload)
+    return payload
+
+
 # --- server -------------------------------------------------------------
 
 
@@ -270,8 +452,9 @@ class _Handler(BaseHTTPRequestHandler):
 
     server_version = "TraderDashboard"
 
-    def __init__(self, *args, state_path: Path, **kwargs) -> None:
+    def __init__(self, *args, state_path: Path, ledger_path: Path | None = None, **kwargs) -> None:
         self.state_path = state_path
+        self.ledger_path = ledger_path
         super().__init__(*args, **kwargs)
 
     # Výchozí handler loguje každý request na stderr, což u stránky, která
@@ -285,6 +468,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_html()
         elif route == "/api/prehled":
             self._send_snapshot()
+        elif route == "/api/portfolio":
+            self._send_portfolio()
         elif route == "/api/verze":
             self._send_json(self._versions())
         else:
@@ -297,9 +482,12 @@ class _Handler(BaseHTTPRequestHandler):
         zbytečné. Změní-li se otisk, teprve pak si stránka řekne o data —
         nebo se rovnou přenačte, když jsme editovali šablonu.
         """
+        kniha = self.ledger_path
         return {
             "stav": self.state_path.stat().st_mtime if self.state_path.exists() else 0.0,
             "ui": INDEX.stat().st_mtime if INDEX.exists() else 0.0,
+            # Dopsaný obchod v knize se má projevit stejně jako pohyb účtu.
+            "kniha": kniha.stat().st_mtime if kniha and kniha.exists() else 0.0,
         }
 
     def _send_html(self) -> None:
@@ -319,6 +507,15 @@ class _Handler(BaseHTTPRequestHandler):
         except (KeyError, TypeError, ValueError) as exc:
             self._send_json({"chyba": f"stavu účtu nerozumím: {exc}"}, status=500)
             return
+        self._send_json(payload)
+
+    def _send_portfolio(self) -> None:
+        """Skutečné portfolio. Chyba tady nesmí shodit zbytek přehledu."""
+        try:
+            payload = _portfolio_payload(self.ledger_path)
+        except Exception as exc:  # noqa: BLE001 - i neznámá chyba je jen prázdný oddíl
+            logger.exception("přehled portfolia selhal")
+            payload = {"vedena": False, "duvod": f"knihu nelze zpracovat: {exc}"}
         self._send_json(payload)
 
     def _send_json(self, payload: dict, status: int = 200) -> None:
@@ -346,21 +543,37 @@ class _Handler(BaseHTTPRequestHandler):
     do_POST = do_PUT = do_DELETE = do_PATCH = _reject  # noqa: N815 - podpis stdlib
 
 
-def make_server(state_path: str | Path, host: str = "127.0.0.1", port: int = 8765):
+def make_server(
+    state_path: str | Path,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    ledger_path: str | Path | None = None,
+):
     """Sestaví server. Nespouští ho — kvůli testům."""
-    handler = partial(_Handler, state_path=Path(state_path))
+    handler = partial(
+        _Handler,
+        state_path=Path(state_path),
+        ledger_path=Path(ledger_path) if ledger_path else None,
+    )
     return ThreadingHTTPServer((host, port), handler)
 
 
-def serve(state_path: str | Path, host: str = "127.0.0.1", port: int = 8765) -> int:
+def serve(
+    state_path: str | Path,
+    host: str = "127.0.0.1",
+    port: int = 8765,
+    ledger_path: str | Path | None = None,
+) -> int:
     """Spustí přehled a běží, dokud ho někdo nepřeruší."""
-    httpd = make_server(state_path, host, port)
+    httpd = make_server(state_path, host, port, ledger_path)
     actual_port = httpd.server_address[1]
     # Vypisujeme "localhost", ne číselnou adresu: Safari s vynuceným HTTPS
     # (mj. anonymní okna) http://127.0.0.1 zablokuje, localhost má výjimku.
     display_host = "localhost" if host == "127.0.0.1" else host
     print(f"\n  Přehled běží na http://{display_host}:{actual_port}")
     print(f"  Stav účtu:  {state_path}")
+    if ledger_path:
+        print(f"  Kniha:      {ledger_path}  (skutečné portfolio, přepočet kurzy ČNB)")
     print("  Jen ke čtení — účet posouvá výhradně `trading paper`.")
     print("  Konec: Ctrl+C\n")
     try:

@@ -316,7 +316,16 @@ def cmd_dashboard(args) -> int:
             "ale bude prázdný, dokud účet nezaložíte přes ./scripts/start-demo.sh",
             file=sys.stderr,
         )
-    return dashboard_module.serve(state, host=args.host, port=args.port)
+    kniha = Path(args.kniha) if args.kniha else None
+    if kniha and not kniha.exists():
+        # Volitelný oddíl: chybějící kniha se prostě neukáže. Říct to ale
+        # nahlas je lepší než nechat uživatele hledat, proč tam nic není.
+        print(
+            f"Varování: kniha {kniha} neexistuje, oddíl se skutečným portfoliem "
+            "se v přehledu neukáže.",
+            file=sys.stderr,
+        )
+    return dashboard_module.serve(state, host=args.host, port=args.port, ledger_path=kniha)
 
 
 def cmd_ledger(args) -> int:
@@ -707,6 +716,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="adresa k poslouchání; výchozí loopback, do sítě stav účtu nepatří",
     )
     p_dash.add_argument("--port", type=int, default=8765, help="port (0 = vybrat volný)")
+    p_dash.add_argument(
+        "--kniha",
+        default=None,
+        help="CSV se skutečným portfoliem; bez něj se oddíl neukáže",
+    )
     p_dash.set_defaults(func=cmd_dashboard)
 
     p_led = sub.add_parser("portfolio", help="přehled skutečného portfolia z účetní knihy")

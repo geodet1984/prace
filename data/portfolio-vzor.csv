@@ -5,6 +5,10 @@
 #
 #     python -m trading portfolio --kniha data/portfolio.csv
 #
+# nebo, chcete-li přehled v korunách i s rozpadem kurzu, v prohlížeči:
+#
+#     python -m trading dashboard --kniha data/portfolio.csv
+#
 # Sloupce:
 #   day       YYYY-MM-DD
 #   type      vklad | vyber | nakup | prodej | dividenda | dan | poplatek
@@ -14,7 +18,7 @@
 #   amount    peněžní tok: kladný = přiteklo, záporný = odteklo
 #   fee       poplatek za obchod; u nákupu zvyšuje pořizovací cenu,
 #             u prodeje snižuje výnos — nezapisujte ho ještě zvlášť
-#   currency  měna účtu
+#   currency  měna **toho pohybu**, ne účtu
 #   note      cokoli pro dohledání
 #
 # Oddělovač smí být čárka i středník. Exportuje-li váš Excel desetinnou
@@ -22,11 +26,27 @@
 #
 # Prodej se páruje s nákupy metodou FIFO, tedy od nejstaršího. Kvůli zisku
 # i kvůli tříleté lhůtě, která se počítá od data konkrétní dávky.
+#
+# MĚNY. Sloupec `currency` je měna jednotlivého pohybu — kniha smí míchat
+# dolarové i eurové nákupy vedle korunových vkladů. Přehled v korunách
+# přepočítá každý pohyb kurzem ČNB **ke dni, kdy nastal** (ne dnešním na
+# všechno; to je táž chyba jako pohled do budoucnosti v backtestu)
+# a zhodnocení rozdělí na výkon aktiva a pohyb kurzu. Kdo vydělal deset
+# procent na titulu a přišel o deset na kurzu, má vidět obojí, ne nulu.
+#
+# Ukázka níž je schválně smíšená: vklad v korunách, nákupy v dolarech
+# a v eurech.
+#
+# POZOR: `trading portfolio` v terminálu zatím kurzy neumí a sčítá čísla
+# tak, jak jsou zapsaná — u smíšené knihy je jeho součet nesmysl. Přehled,
+# který měny opravdu přepočítá, je zatím jen ten v prohlížeči:
+# `python -m trading dashboard --kniha ...`.
 day,type,symbol,quantity,price,amount,fee,currency,note
 2024-01-15,vklad,,,,50000.00,,CZK,první vklad
-2024-01-20,nakup,CSPX,2,480.50,-961.00,1.00,CZK,S&P 500 akumulační
-2024-03-15,nakup,CSPX,1,505.00,-505.00,1.00,CZK,přikoupeno
-2024-06-10,dividenda,VWCE,,,120.00,,CZK,čtvrtletní
-2024-06-10,dan,,,,-18.00,,CZK,srážková daň z dividendy
-2024-09-01,prodej,CSPX,1,530.00,530.00,1.00,CZK,odprodána nejstarší dávka
+2024-01-22,nakup,SPY,2,478.50,-957.00,1.00,USD,S&P 500 ETF
+2024-03-15,nakup,SPY,1,512.00,-512.00,1.00,USD,přikoupeno
+2024-04-08,nakup,IWDA,4,88.20,-352.80,0.50,EUR,celý svět, akumulační
+2024-06-10,dividenda,SPY,,,12.40,,USD,čtvrtletní
+2024-06-10,dan,,,,-1.86,,USD,srážková daň 15 %
+2024-09-02,prodej,SPY,1,545.00,545.00,1.00,USD,odprodána nejstarší dávka
 2024-12-31,poplatek,,,,-150.00,,CZK,vedení účtu za rok

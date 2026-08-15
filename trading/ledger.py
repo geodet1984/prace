@@ -22,6 +22,14 @@ ten druh čísla, kvůli kterému člověk obchoduje víc, než se mu vyplácí.
 
 Peníze se počítají v ``float``, stejně jako ve zbytku projektu. Na evidenci
 řádu statisíců to stačí; zaokrouhluje se až při výpisu.
+
+Ocenění existuje ve dvou podobách. ``valuation`` počítá v měně zápisů
+a o kurzech nic neví — je to nejjednodušší pohled a pro účet vedený
+v jediné měně stačí. ``valuation_czk`` převede všechno do korun ke
+**dni, kdy se to stalo**, a hlavně rozdělí zhodnocení na výkon aktiva
+a pohyb kurzu. Bez toho rozdělení je korunová evidence zavádějící: kdo
+vydělal na titulu deset procent a přišel o deset na kurzu, vidí nulu
+a nemá jak poznat, že to byly dvě velké věci proti sobě.
 """
 
 from __future__ import annotations
@@ -32,8 +40,20 @@ from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from enum import Enum
 from pathlib import Path
+from typing import Protocol
 
 logger = logging.getLogger(__name__)
+
+
+class ZdrojKurzu(Protocol):
+    """Cokoli, co umí říct kurz měny k datu.
+
+    Záměrně minimální rozhraní: kniha nemá vědět, jestli kurz přišel
+    z ČNB, z cache nebo z tabulky v testu. Chybějící kurz se hlásí
+    výjimkou z rodiny ``LookupError`` — ``fx.KurzChybi`` z ní dědí.
+    """
+
+    def kurz(self, mena: str, den: date) -> float: ...
 
 # Časový test podle §4 zákona o daních z příjmů: cenné papíry držené déle
 # než tři roky jsou osvobozené. Konstanta je tady proto, aby se dala změnit
@@ -125,6 +145,11 @@ class Lot:
     cost_per_unit: float
     """Pořizovací cena za kus **včetně poměrné části nákupního poplatku**."""
 
+    currency: str = "USD"
+    """Měna nákupu. Dávka si ji nese s sebou, protože kurz se bere k datu
+    pořízení *téhle* dávky — a kdo přikupoval, má každou pořízenou jiným
+    kurzem."""
+
     @property
     def cost(self) -> float:
         return self.quantity * self.cost_per_unit
@@ -145,6 +170,8 @@ class Realized:
     cost: float
     proceeds: float
     """Výnos z prodeje po odečtení poměrné části prodejního poplatku."""
+
+    currency: str = "USD"
 
     @property
     def pnl(self) -> float:
@@ -280,7 +307,7 @@ class Ledger:
                 # Poplatek je součástí pořizovací ceny, ne samostatná ztráta.
                 cena_za_kus = (tx.quantity * tx.price + tx.fee) / tx.quantity
                 lots.setdefault(tx.symbol, []).append(
-                    Lot(tx.day, tx.symbol, tx.quantity, cena_za_kus)
+                    Lot(tx.day, tx.symbol, tx.quantity, cena_za_kus, tx.currency)
                 )
 
             elif tx.type is TxType.SELL:
@@ -304,6 +331,11 @@ class Ledger:
                             sold=tx.day,
                             cost=kusu * lot.cost_per_unit,
                             proceeds=kusu * vynos_za_kus,
+                            # Měna dávky, ne prodeje. Prodej cizí měny za
+                            # jinou měnu je samostatný obchod, který tahle
+                            # kniha neumí — a předstírat opak by rozpad
+                            # zhodnocení tiše rozhodil.
+                            currency=lot.currency,
                         )
                     )
                     lot.quantity -= kusu
@@ -402,6 +434,224 @@ class Ledger:
             "pozic": len({lot.symbol for lot in lots}),
             "bez_ceny": sorted(set(bez_ceny)),
         }
+
+    # --- ocenění v korunách ---------------------------------------------
+
+    def valuation_czk(
+        self,
+        prices: dict[str, float],
+        kurzy: ZdrojKurzu,
+        k_datu: date | None = None,
+        domaci: str = "CZK",
+    ) -> dict:
+        """Ocenění v domácí měně s rozpadem na výkon aktiva a pohyb kurzu.
+
+        ``kurzy`` je cokoli s metodou ``kurz(mena, den) -> float``; kurz je
+        "kolik korun stojí jeden kus cizí měny". Zdroj se předává zvenčí ze
+        stejného důvodu jako ceny — evidence tak jde spočítat bez sítě.
+
+        **Kurz se bere k datu pohybu, ne dnešní na všechno.** Přepočíst
+        nákup z roku 2020 dnešním kurzem je táž chyba jako pohled do
+        budoucnosti v backtestu: použije informaci, kterou jste tehdy
+        neměli, a systematicky posune výsledek.
+
+        Rozpad zhodnocení stojí na jedné rovnosti, kterou hlídá test::
+
+            výkon aktiva + pohyb kurzu == nerealizovaný + realizovaný zisk
+
+        Zisk v korunách je ``q·c₁·r₁ − q·c₀·r₀`` a ten se dá rozdělit
+        dvěma stejně platnými způsoby — smíšený člen ``q·(c₁−c₀)·(r₁−r₀)``
+        musí někam. Dáváme ho ke kurzu, takže:
+
+        * **výkon aktiva** ``q·(c₁−c₀)·r₀`` je "kolik byste vydělali,
+          kdyby kurz stál" — přesně ten myšlený pokus, kvůli kterému se
+          na rozpad člověk dívá;
+        * **pohyb kurzu** ``q·c₁·(r₁−r₀)`` je změna kurzu na *dnešní*
+          hodnotě pozice, tedy na částce, která je kurzu vystavená teď.
+
+        Ta volba není jediná možná a je dobré o ní vědět; podstatné je, že
+        se obě části sečtou přesně na celek a ani koruna se nepočítá dvakrát.
+
+        Co tenhle výpočet **neumí**: dividendu inkasovanou v dolarech
+        a v dolarech ponechanou. Kniha nevede zůstatek hotovosti po měnách,
+        takže takový pohyb přepočte kurzem dne, kdy přišel, a další pohyb
+        kurzu na nevyměněné hotovosti nevidí. U reinvestovaných dividend
+        to nevadí (nákup má vlastní datum a kurz), u hromadící se hotovosti
+        ano.
+        """
+        k_datu = k_datu or date.today()
+        lots, realized = self._prehraj()
+        vsechny_lots = sorted(
+            (lot for fronta in lots.values() for lot in fronta), key=lambda x: (x.symbol, x.day)
+        )
+
+        bez_kurzu: set[str] = set()
+
+        def prepocet(mena: str, den: date) -> float | None:
+            """Kurz, nebo ``None`` s poznámkou. Dosadit 1.0 by byla lež."""
+            mena = (mena or domaci).upper()
+            if mena == domaci.upper():
+                return 1.0
+            try:
+                return float(kurzy.kurz(mena, den))
+            except LookupError:
+                bez_kurzu.add(mena)
+                return None
+
+        hodnota = porizovaci = 0.0
+        ner_aktivum = ner_kurz = 0.0
+        bez_ceny: list[str] = []
+        pozice: list[dict] = []
+
+        for lot in vsechny_lots:
+            kurz_nakup = prepocet(lot.currency, lot.day)
+            kurz_dnes = prepocet(lot.currency, k_datu)
+            if kurz_nakup is None or kurz_dnes is None:
+                # Bez kurzu se dávka do korunových součtů nezapočítá vůbec.
+                # Jinak by se rovnost rozpadu držela jen zdánlivě.
+                continue
+
+            cena = prices.get(lot.symbol)
+            if cena is None:
+                bez_ceny.append(lot.symbol)
+                cena = lot.cost_per_unit
+
+            cost = lot.quantity * lot.cost_per_unit * kurz_nakup
+            value = lot.quantity * cena * kurz_dnes
+            aktivum = lot.quantity * (cena - lot.cost_per_unit) * kurz_nakup
+            kurzove = lot.quantity * cena * (kurz_dnes - kurz_nakup)
+
+            hodnota += value
+            porizovaci += cost
+            ner_aktivum += aktivum
+            ner_kurz += kurzove
+            pozice.append(
+                {
+                    "symbol": lot.symbol,
+                    "quantity": lot.quantity,
+                    "mena": lot.currency,
+                    "nakoupeno": lot.day.isoformat(),
+                    "cena_za_kus": lot.cost_per_unit,
+                    "cena": cena,
+                    "kurz_nakup": kurz_nakup,
+                    "kurz_dnes": kurz_dnes,
+                    "porizovaci_cena": cost,
+                    "hodnota": value,
+                    "zisk": value - cost,
+                    "zisk_pct": (value - cost) / cost * 100.0 if cost else 0.0,
+                    "vykon_aktiva": aktivum,
+                    "kurzovy_rozdil": kurzove,
+                    "bez_ceny": lot.symbol in bez_ceny,
+                }
+            )
+
+        real_aktivum = real_kurz = realizovany = 0.0
+        for obchod in realized:
+            kurz_nakup = prepocet(obchod.currency, obchod.bought)
+            kurz_prodej = prepocet(obchod.currency, obchod.sold)
+            if kurz_nakup is None or kurz_prodej is None:
+                continue
+            realizovany += obchod.proceeds * kurz_prodej - obchod.cost * kurz_nakup
+            real_aktivum += (obchod.proceeds - obchod.cost) * kurz_nakup
+            real_kurz += obchod.proceeds * (kurz_prodej - kurz_nakup)
+
+        toky = self._toky_czk(prepocet)
+        nerealizovany = hodnota - porizovaci
+
+        return {
+            "mena": domaci.upper(),
+            "k_datu": k_datu.isoformat(),
+            "hodnota": hodnota,
+            "porizovaci_cena": porizovaci,
+            "nerealizovany_zisk": nerealizovany,
+            "realizovany_zisk": realizovany,
+            "dividendy": toky["dividendy"],
+            "dane": toky["dane"],
+            "poplatky": toky["poplatky_mimo_obchody"],
+            "poplatky_v_obchodech": toky["poplatky_v_obchodech"],
+            "vlozeno": toky["vlozeno"],
+            "celkem": (
+                nerealizovany
+                + realizovany
+                + toky["dividendy"]
+                + toky["dane"]
+                + toky["poplatky_mimo_obchody"]
+            ),
+            # Druhý rozpad **téhož** zhodnocení z pozic — podle příčiny, ne
+            # podle druhu. Tyhle dvě položky se sčítají na (nerealizovaný +
+            # realizovaný), ne na "celkem": dividendy, daně ani poplatky mimo
+            # obchody nemají s pohybem ceny titulu co dělat. Přičíst je
+            # k předchozímu rozpadu by započetlo tytéž peníze dvakrát.
+            "vykon_aktiva": ner_aktivum + real_aktivum,
+            "kurzovy_rozdil": ner_kurz + real_kurz,
+            "vykon_aktiva_nerealizovany": ner_aktivum,
+            "kurzovy_rozdil_nerealizovany": ner_kurz,
+            "pozic": len({p["symbol"] for p in pozice}),
+            "pozice": pozice,
+            "meny": self._expozice(pozice),
+            "kurzy": self._kurzy_k_datu(prepocet, k_datu),
+            "bez_ceny": sorted(set(bez_ceny)),
+            # Měny, pro které kurz nebyl. Jejich pohyby v součtech **nejsou** —
+            # radši chybějící řádek než tichý přepočet kurzem 1:1.
+            "bez_kurzu": sorted(bez_kurzu),
+        }
+
+    def _toky_czk(self, prepocet) -> dict[str, float]:
+        """Peněžní toky přepočtené kurzem **dne, kdy nastaly**.
+
+        Vklad 1 000 USD z roku 2020 je jiná částka v korunách než tentýž
+        vklad dnes. Sečíst je dnešním kurzem by z "vloženo" udělalo číslo,
+        které se mění, i když jste nic nevložili.
+        """
+        out = {"vklady": 0.0, "vybery": 0.0, "dividendy": 0.0, "dane": 0.0}
+        klice = {
+            TxType.DEPOSIT: "vklady",
+            TxType.WITHDRAWAL: "vybery",
+            TxType.DIVIDEND: "dividendy",
+            TxType.TAX: "dane",
+        }
+        poplatky = 0.0
+        v_obchodech = 0.0
+        for tx in self.transactions:
+            kurz = prepocet(tx.currency, tx.day)
+            if kurz is None:
+                continue
+            if tx.type in klice:
+                out[klice[tx.type]] += tx.amount * kurz
+            elif tx.type is TxType.FEE:
+                poplatky += tx.amount * kurz
+            if tx.type in (TxType.BUY, TxType.SELL):
+                v_obchodech -= tx.fee * kurz
+        out["vlozeno"] = out["vklady"] + out["vybery"]
+        out["poplatky_mimo_obchody"] = poplatky
+        out["poplatky_v_obchodech"] = v_obchodech
+        return out
+
+    @staticmethod
+    def _expozice(pozice: list[dict]) -> list[dict]:
+        """Kolik portfolia leží v které měně.
+
+        Rozpad zhodnocení říká, co kurz udělal; tohle říká, co udělat může.
+        """
+        celkem = sum(p["hodnota"] for p in pozice)
+        podle_meny: dict[str, dict] = {}
+        for p in pozice:
+            zaznam = podle_meny.setdefault(
+                p["mena"], {"mena": p["mena"], "hodnota": 0.0, "kurz": p["kurz_dnes"]}
+            )
+            zaznam["hodnota"] += p["hodnota"]
+        for zaznam in podle_meny.values():
+            zaznam["podil_pct"] = zaznam["hodnota"] / celkem * 100.0 if celkem else 0.0
+        return sorted(podle_meny.values(), key=lambda z: -z["hodnota"])
+
+    def _kurzy_k_datu(self, prepocet, k_datu: date) -> dict[str, float]:
+        """Kurzy použité k dnešnímu ocenění — ať je vidět, čím se počítalo."""
+        out = {}
+        for mena in sorted({t.currency for t in self.transactions}):
+            kurz = prepocet(mena, k_datu)
+            if kurz is not None:
+                out[mena] = kurz
+        return out
 
     def tax_clock(self, k_datu: date | None = None) -> list[dict]:
         """Kdy která dávka projde časovým testem.

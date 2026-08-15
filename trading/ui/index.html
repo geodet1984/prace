@@ -220,6 +220,60 @@ th:first-child, td:first-child { text-align: left; }
 .stat .v { font-family: var(--display); font-size: 20px; margin-top: 2px; font-variant-numeric: lining-nums tabular-nums; }
 @media (max-width: 860px) { .stat { border-top: 1px solid var(--linka-slaba); } }
 
+/* ── skutečné portfolio ────────────────────────────────────────────── */
+/* Vlastní kniha je jiný druh dokumentu než papírový účet: tam se zkouší,
+   tady se účtuje. Oddíl proto začíná dělicí vinětou a má vlastní záhlaví,
+   aby si nikdo nespletl fiktivní peníze se skutečnými. */
+#portfolio[hidden] { display: none; }
+.predel {
+  display: flex; align-items: center; gap: 16px;
+  margin: 52px 0 22px; color: var(--ink-dim);
+}
+.predel::before, .predel::after {
+  content: ""; flex: 1; border-top: 3px double var(--ink); opacity: .5;
+}
+.predel span {
+  font-family: var(--display); font-size: 12px; letter-spacing: .22em;
+  text-transform: uppercase; white-space: nowrap;
+}
+
+/* Rozpad zhodnocení: dvě knihy vedle sebe. Vlevo podle druhu, vpravo podle
+   příčiny. Je to **totéž číslo** rozepsané dvakrát — proto vedle sebe
+   a proto má každý sloupec vlastní součtovou čáru. Sečíst je dohromady by
+   znamenalo započítat tytéž peníze dvakrát a to je přesně chyba, které
+   tenhle layout brání. */
+/* minmax(0, …), ne 1fr: implicitní minimum gridu je "šířka obsahu", a protože
+   buňky tabulek v celém dokumentu nezalamují, roztlačila by dlouhá poznámka
+   pod čarou sloupec tak, že by čísla skončila mimo obrazovku. */
+.rozpady { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 34px; }
+@media (max-width: 760px) { .rozpady { grid-template-columns: minmax(0, 1fr); gap: 26px; } }
+.rozpad h3 {
+  font-family: var(--display); font-size: 11.5px; font-weight: 600;
+  letter-spacing: .16em; text-transform: uppercase; color: var(--ink-faint);
+  margin: 14px 0 2px; border-bottom: 1px solid var(--linka-slaba); padding-bottom: 4px;
+}
+.rozpad table { min-width: 0; }
+.rozpad td { border-left: none; }
+.rozpad tr.soucet td {
+  border-top: 1px solid var(--ink); border-bottom: 3px double var(--ink);
+  font-family: var(--display); font-size: 16px; padding-top: 9px;
+}
+.rozpad tr.podcarou td {
+  border-bottom: none; color: var(--ink-faint); font-size: 12.5px; padding-top: 9px;
+  /* Vysvětlivka je věta, ne číslo — musí zalomit. Globální `nowrap` na td
+     je kvůli tabulkám s čísly a tady by udělal řádek přes celou obrazovku. */
+  white-space: normal; line-height: 1.5;
+}
+.rozpad .popis { text-align: left; font-variant: small-caps; letter-spacing: .04em; }
+
+/* Podíl měn — proužek, ne koláč. Koláč o dvou dílech nesdělí nic, co by
+   pruh neřekl líp, a na papíře vypadá jako výsečový graf z prezentace. */
+.meny { display: flex; margin: 12px 0 4px; height: 10px; border: 1px solid var(--linka); }
+.meny i { display: block; height: 100%; }
+.meny i:nth-child(odd)  { background: var(--ink-dim); }
+.meny i:nth-child(even) { background: var(--linka); }
+.meny-popis { font-size: 12.5px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+
 /* ── tiráž ─────────────────────────────────────────────────────────── */
 footer {
   margin-top: 44px; text-align: center;
@@ -307,11 +361,51 @@ footer   { animation-delay: .36s; }
     <div id="obchody"></div>
   </section>
 
+  <div id="portfolio" hidden>
+    <div class="predel"><span>Skutečné portfolio</span></div>
+
+    <header>
+      <p class="podtitul" style="margin-bottom:10px">
+        z účetní knihy <span id="kniha-soubor" class="dim"></span>,
+        přepočteno kurzy ČNB ke dni každého pohybu
+      </p>
+      <hr class="linka-dvojita">
+    </header>
+
+    <div class="figury" id="p-karty"></div>
+    <div id="p-varovani"></div>
+
+    <section>
+      <div class="head">
+        <h2>Rozpad zhodnocení</h2>
+        <span class="hint">totéž číslo dvakrát — podle druhu a podle příčiny; sloupce se nesčítají</span>
+      </div>
+      <div class="rozpady" id="p-rozpad"></div>
+    </section>
+
+    <section>
+      <div class="head">
+        <h2>Otevřené pozice</h2>
+        <span class="hint">po dávkách, jak se páruje FIFO — každá má vlastní kurz nákupu</span>
+      </div>
+      <div id="p-pozice"></div>
+    </section>
+
+    <section>
+      <div class="head">
+        <h2>Časový test</h2>
+        <span class="hint">tři roky od data dávky. Není to daňové poradenství, jen rozdíl dat</span>
+      </div>
+      <div id="p-cas"></div>
+    </section>
+  </div>
+
   <footer>
     <span class="fleuron">❦</span>
-    Fiktivní peníze. Přehled je jen ke čtení — účet posouvá výhradně
-    <code>trading paper</code>, dashboard do stavu nikdy nezapisuje.<br>
-    Stránka se sama obnoví, když se změní stav účtu nebo <code>trading/ui/index.html</code>.
+    Fiktivní peníze na papírovém účtu, skutečné v účetní knize. Přehled je jen ke čtení —
+    účet posouvá výhradně <code>trading paper</code>, dashboard do stavu nikdy nezapisuje
+    a knihu jen čte.<br>
+    Stránka se sama obnoví, když se změní stav účtu, kniha nebo <code>trading/ui/index.html</code>.
   </footer>
 
 </div>
@@ -481,8 +575,152 @@ function obchody(rows) {
     </tr>`).join("")}</tbody></table></div>`;
 }
 
+// ── skutečné portfolio ─────────────────────────────────────────────────
+// Celý smysl tohohle oddílu je jedna věta: kolik z toho, co vidíte, udělal
+// titul a kolik kurz. Proto je "z toho kurz" hned v hlavní řádce čísel,
+// ne schované v tabulce dole.
+function pKarty(s) {
+  const v = s.prehled, m = v.mena;
+  const podil = v.celkem ? Math.abs(v.kurzovy_rozdil) / Math.abs(v.celkem) * 100 : 0;
+  $("p-karty").innerHTML = `
+    <div class="figura hero">
+      <div class="label">Hodnota portfolia</div>
+      <div class="value">${money(v.hodnota)}<span class="faint" style="font-size:18px"> ${m}</span></div>
+      <div class="note">vloženo vlastních ${money(v.vlozeno)} ${m} · ${s.pohybu} pohybů</div>
+    </div>
+    <div class="figura">
+      <div class="label">Zhodnocení celkem</div>
+      <div class="value ${sign(v.celkem)}">${v.celkem >= 0 ? "+" : ""}${money(v.celkem)}</div>
+      <div class="note">${v.vlozeno ? pct(v.celkem / v.vlozeno * 100) + " z vloženého" : "—"}</div>
+    </div>
+    <div class="figura">
+      <div class="label">Z toho výkon aktiv</div>
+      <div class="value ${sign(v.vykon_aktiva)}">${v.vykon_aktiva >= 0 ? "+" : ""}${money(v.vykon_aktiva)}</div>
+      <div class="note">kdyby kurz stál na místě</div>
+    </div>
+    <div class="figura">
+      <div class="label">Z toho pohyb kurzu</div>
+      <div class="value ${sign(v.kurzovy_rozdil)}">${v.kurzovy_rozdil >= 0 ? "+" : ""}${money(v.kurzovy_rozdil)}</div>
+      <div class="note">${podil >= 1 ? dec(podil, 0) + " % z výsledku" : "měnový vliv zanedbatelný"}</div>
+    </div>
+    <div class="figura">
+      <div class="label">Otevřených titulů</div>
+      <div class="value">${czk.format(v.pozic)}</div>
+      <div class="note">${Object.entries(v.kurzy).filter(([k]) => k !== m).map(([k, r]) => k + " " + dec(r, 3)).join(" · ") || "vše v " + m}</div>
+    </div>`;
+}
+
+function pRozpad(v) {
+  const radek = (popis, castka, cls = "") =>
+    `<tr class="${cls}"><td class="popis">${popis}</td>
+       <td class="${sign(castka)}">${castka >= 0 ? "+" : ""}${money(castka)}</td></tr>`;
+
+  // Levý sloupec sčítá na "celkem", pravý na (nerealizovaný + realizovaný).
+  // Jsou to dva pohledy na tytéž peníze; kurzový rozdíl je průřez oběma
+  // ziskovými řádky vlevo, ne další položka pod nimi.
+  const zisky = v.nerealizovany_zisk + v.realizovany_zisk;
+  $("p-rozpad").innerHTML = `
+    <div class="rozpad">
+      <h3>Podle druhu</h3>
+      <table><tbody>
+        ${radek("Nerealizovaný zisk", v.nerealizovany_zisk)}
+        ${radek("Realizovaný zisk", v.realizovany_zisk)}
+        ${radek("Dividendy", v.dividendy)}
+        ${radek("Daně", v.dane)}
+        ${radek("Poplatky mimo obchody", v.poplatky)}
+        ${radek("Celkem", v.celkem, "soucet")}
+        <tr class="podcarou"><td class="popis">z toho poplatky za obchody</td>
+          <td>${money(v.poplatky_v_obchodech)}</td></tr>
+        <tr class="podcarou"><td class="popis" colspan="2">
+          Poplatky za obchody jsou už uvnitř pořizovací ceny a výnosu — proto pod čarou.</td></tr>
+      </tbody></table>
+    </div>
+    <div class="rozpad">
+      <h3>Podle příčiny</h3>
+      <table><tbody>
+        ${radek("Výkon aktiv", v.vykon_aktiva)}
+        ${radek("Pohyb kurzu", v.kurzovy_rozdil)}
+        ${radek("Zisk z pozic", zisky, "soucet")}
+        <tr class="podcarou"><td class="popis" colspan="2">
+          Sčítá se na nerealizovaný + realizovaný zisk, ne na "celkem": dividendy,
+          daně ani poplatky s pohybem ceny titulu nesouvisí. Přičíst tenhle sloupec
+          k levému by tytéž peníze započetlo dvakrát.</td></tr>
+      </tbody></table>
+    </div>`;
+}
+
+function pMeny(meny, mena) {
+  if (meny.length < 2) return "";
+  return `<div class="meny">${meny.map(m => `<i style="width:${m.podil_pct}%"></i>`).join("")}</div>
+    <div class="meny-popis">${meny.map(m =>
+      `${esc(m.mena)} ${dec(m.podil_pct, 0)} % (kurz ${dec(m.kurz, 3)})`).join(" &nbsp;·&nbsp; ")}
+      — tolik portfolia visí na kurzu, ne na trhu.</div>`;
+}
+
+function pPozice(rows, mena) {
+  if (!rows.length) { $("p-pozice").innerHTML = `<div class="empty">žádné otevřené pozice</div>`; return; }
+  $("p-pozice").innerHTML = `<div class="scroll"><table>
+    <thead><tr>
+      <th>Symbol</th><th>Kusů</th><th>Měna</th><th>Nakoupeno</th><th>Kurz tehdy</th><th>Kurz dnes</th>
+      <th>Pořizovací</th><th>Hodnota</th><th>Zisk</th><th>%</th><th>Z aktiva</th><th>Z kurzu</th>
+    </tr></thead><tbody>${rows.map(p => `<tr>
+      <td class="sym">${esc(p.symbol)}${p.bez_ceny ? ` <span class="faint" title="bez aktuální ceny, oceněno pořizovací">*</span>` : ""}</td>
+      <td>${dec(p.quantity, 3)}</td>
+      <td class="dim">${esc(p.mena)}</td>
+      <td class="dim">${esc(p.nakoupeno)}</td>
+      <td class="dim">${dec(p.kurz_nakup, 3)}</td>
+      <td>${dec(p.kurz_dnes, 3)}</td>
+      <td class="dim">${money(p.porizovaci_cena)}</td>
+      <td>${money(p.hodnota)}</td>
+      <td class="${sign(p.zisk)}">${p.zisk >= 0 ? "+" : ""}${money(p.zisk)}</td>
+      <td class="${sign(p.zisk_pct)}">${pct(p.zisk_pct)}</td>
+      <td class="${sign(p.vykon_aktiva)}">${p.vykon_aktiva >= 0 ? "+" : ""}${money(p.vykon_aktiva)}</td>
+      <td class="${sign(p.kurzovy_rozdil)}">${p.kurzovy_rozdil >= 0 ? "+" : ""}${money(p.kurzovy_rozdil)}</td>
+    </tr>`).join("")}</tbody></table></div>`;
+}
+
+function pCas(rows) {
+  if (!rows.length) { $("p-cas").innerHTML = `<div class="empty">žádné dávky k hlídání</div>`; return; }
+  $("p-cas").innerHTML = `<div class="scroll"><table>
+    <thead><tr>
+      <th>Symbol</th><th>Kusů</th><th>Nakoupeno</th><th>Osvobozeno od</th><th>Zbývá</th><th>Stav</th>
+    </tr></thead><tbody>${rows.map(r => `<tr>
+      <td class="sym">${esc(r.symbol)}</td>
+      <td>${dec(r.quantity, 3)}</td>
+      <td class="dim">${esc(r.nakoupeno)}</td>
+      <td>${esc(r.osvobozeno_od)}</td>
+      <td class="${r.splneno ? "faint" : r.dni_zbyva < 90 ? "warn" : ""}">${r.splneno ? "—" : czk.format(r.dni_zbyva) + " dní"}</td>
+      <td style="text-align:left"><span class="duvod">${r.splneno ? "prošlo" : "běží"}</span></td>
+    </tr>`).join("")}</tbody></table></div>`;
+}
+
+async function nactiPortfolio() {
+  let json;
+  try {
+    json = await (await fetch("/api/portfolio", { cache: "no-store" })).json();
+  } catch (e) {
+    // Kniha je volitelná. Nedostupný endpoint nesmí shodit zbytek stránky.
+    $("portfolio").hidden = true;
+    return;
+  }
+  if (!json || !json.vedena) { $("portfolio").hidden = true; return; }
+
+  const v = json.prehled;
+  $("portfolio").hidden = false;
+  $("kniha-soubor").textContent = json.soubor;
+  pKarty(json);
+  $("p-varovani").innerHTML = json.upozorneni.length
+    ? `<div class="warnings"><h2>Za povšimnutí</h2>
+       <ul>${json.upozorneni.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>`
+    : "";
+  pRozpad(v);
+  pPozice(v.pozice, v.mena);
+  $("p-pozice").insertAdjacentHTML("beforeend", pMeny(v.meny, v.mena));
+  pCas(json.casovy_test);
+}
+
 // ── načítání a automatické obnovení ────────────────────────────────────
-let posledniStav = null, posledniUi = null, data = null;
+let posledniStav = null, posledniUi = null, posledniKniha = null, data = null;
 
 async function nacti() {
   const res = await fetch("/api/prehled", { cache: "no-store" });
@@ -515,6 +753,9 @@ async function hlidej() {
     if (posledniUi !== null && v.ui !== posledniUi) { location.reload(); return; }
     posledniUi = v.ui;
     if (v.stav !== posledniStav) { posledniStav = v.stav; await nacti(); stav("aktuální", false); }
+    // Kniha má vlastní otisk: dopsaný obchod se má projevit stejně jako
+    // pohyb účtu, aniž by se kvůli tomu přepočítával papírový přehled.
+    if (v.kniha !== posledniKniha) { posledniKniha = v.kniha; await nactiPortfolio(); }
   } catch (e) {
     stav("server neběží", true);
   }
@@ -526,6 +767,9 @@ async function hlidej() {
     stav("chyba", true);
     $("chyba").innerHTML = `<div class="warnings"><div class="error">${esc(e.message)}</div></div>`;
   }
+  // Portfolio zvlášť a bez await v řadě: kniha může chtít kurzy ze sítě
+  // a papírový účet na to nemá čekat.
+  nactiPortfolio().catch(() => { $("portfolio").hidden = true; });
   setInterval(hlidej, 1500);
   addEventListener("resize", () => { if (data) graf(data.krivka); });
 })();

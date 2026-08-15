@@ -9,6 +9,7 @@ from datetime import date, timedelta
 
 import pytest
 
+from trading.fx import KurzyPodleDne, PevneKurzy
 from trading.ledger import (
     CASOVY_TEST,
     Ledger,
@@ -288,3 +289,194 @@ def test_neznamy_typ_pohybu_hlasi_radek(tmp_path):
 def test_nakup_bez_symbolu_je_chyba():
     with pytest.raises(LedgerError, match="bez symbolu"):
         Transaction(day=date(2024, 1, 1), type=TxType.BUY, amount=-100, quantity=1, price=100)
+
+
+# --- koruny: kurz a rozpad zhodnocení -----------------------------------
+#
+# Uživatel nakupuje v dolarech a žije v korunách, takže drží dvě sázky
+# najednou. Testy níž hlídají, že se dají od sebe odlišit — a že se
+# přitom nezapočítají dvakrát.
+
+#: Dolar za dvacet při nákupu, za osmnáct při ocenění: koruna posílila
+#: o deset procent. Kurz je vždy "kolik korun stojí jeden dolar".
+KURZY = KurzyPodleDne(
+    {
+        ("USD", date(2024, 1, 2)): 20.0,
+        ("USD", date(2024, 6, 2)): 19.0,
+        ("USD", date(2026, 1, 2)): 18.0,
+        ("EUR", date(2024, 1, 2)): 25.0,
+        ("EUR", date(2026, 1, 2)): 25.0,
+    }
+)
+
+DNES = date(2026, 1, 2)
+
+
+def usd_kniha():
+    """Jeden dolarový nákup za sto dolarů."""
+    led = Ledger()
+    led.add(tx("2024-01-02", TxType.BUY, symbol="X", quantity=1, price=100, currency="USD"))
+    return led
+
+
+def test_rust_titulu_pohlceny_posilenim_koruny_je_nula():
+    """Deset procent nahoru na titulu a deset procent nahoru na koruně = nic.
+
+    Tohle je celý důvod, proč rozpad existuje. Kdo vidí jen výsledek,
+    myslí si, že se nestalo nic; přitom se staly dvě velké věci proti
+    sobě a jedna z nich se dá řídit.
+    """
+    v = usd_kniha().valuation_czk({"X": 110.0}, KURZY, k_datu=DNES)
+
+    assert v["celkem"] == pytest.approx(-20.0), "1980 Kč hodnota proti 2000 Kč pořizovací"
+    assert v["vykon_aktiva"] == pytest.approx(200.0), "titul sám vydělal 10 USD po 20 Kč"
+    assert v["kurzovy_rozdil"] == pytest.approx(-220.0)
+
+
+def test_vykon_aktiva_a_kurz_se_nescitaji_dvakrat():
+    """Rozpad podle příčiny musí dát přesně zisk z pozic, ne o kus víc.
+
+    Smíšený člen ``q·(c₁−c₀)·(r₁−r₀)`` musí připadnout právě jedné
+    z položek. Připočíst ho oběma je snadná chyba, po které rozpad sedí
+    na papíře a nesedí v součtu — a přesně tak vzniká přehled, kterému
+    se pak nedá věřit ani v jednom čísle.
+    """
+    led = usd_kniha()
+    led.add(tx("2024-01-02", TxType.BUY, symbol="Y", quantity=2, price=50, currency="USD"))
+    led.add(tx("2024-06-02", TxType.SELL, symbol="Y", quantity=2, price=70, currency="USD"))
+    led.add(tx("2024-01-02", TxType.BUY, symbol="E", quantity=3, price=40, currency="EUR"))
+
+    v = led.valuation_czk({"X": 110.0, "E": 45.0}, KURZY, k_datu=DNES)
+
+    assert v["vykon_aktiva"] + v["kurzovy_rozdil"] == pytest.approx(
+        v["nerealizovany_zisk"] + v["realizovany_zisk"]
+    )
+
+
+def test_rozpad_podle_druhu_dava_stejne_celkem_jako_v_puvodni_mene():
+    """Přepočet nesmí měnit strukturu výsledku, jen jednotku.
+
+    Kniha vedená v jediné měně s kurzem 1,0 musí v korunách dát tytéž
+    položky jako ``valuation``. Kdyby se lišily, byl by rozdíl v jednom
+    z obou výpočtů, ne v kurzu.
+    """
+    led = usd_kniha()
+    led.add(tx("2024-04-02", TxType.DIVIDEND, symbol="X", amount=5, currency="USD"))
+    led.add(tx("2024-04-02", TxType.TAX, amount=-1, currency="USD"))
+
+    jedna = PevneKurzy({"USD": 1.0})
+    v_czk = led.valuation_czk({"X": 110.0}, jedna, k_datu=DNES)
+    v_usd = led.valuation({"X": 110.0})
+
+    for klic in ("hodnota", "nerealizovany_zisk", "dividendy", "dane", "celkem", "vlozeno"):
+        assert v_czk[klic] == pytest.approx(v_usd[klic]), klic
+
+
+def test_kurz_se_bere_ke_dni_nakupu_ne_dnesni():
+    """Dnešní kurz na starý nákup je táž chyba jako pohled do budoucnosti.
+
+    Použije informaci, kterou jste v den nákupu neměli. Pořizovací cena
+    v korunách je dána kurzem *tehdy* — a přesně proto může pozice
+    v korunách prodělávat, i když v dolarech vydělává.
+    """
+    v = usd_kniha().valuation_czk({"X": 100.0}, KURZY, k_datu=DNES)
+
+    assert v["porizovaci_cena"] == pytest.approx(2000.0), "100 USD × 20 Kč z ledna 2024"
+    assert v["hodnota"] == pytest.approx(1800.0), "táž cena, ale dnešní kurz 18"
+    assert v["vykon_aktiva"] == pytest.approx(0.0), "titul se nehnul"
+    assert v["kurzovy_rozdil"] == pytest.approx(-200.0), "celá ztráta je kurzová"
+
+
+def test_dnesnim_kurzem_na_vsechno_by_kurzovy_rozdil_zmizel():
+    """Kontrolní test k předchozímu: kdyby se použil jeden kurz na všechno,
+    kurzový rozdíl by vyšel nula — a chyba by nebyla jak odhalit.
+
+    Držíme ho tu proto, že "vypadá to správně" je u přepočtu měn slabý
+    argument: špatná verze vypadá stejně dobře, jen tvrdí, že kurz nikdy
+    nic neudělal.
+    """
+    jeden = PevneKurzy({"USD": 18.0})
+    v = usd_kniha().valuation_czk({"X": 100.0}, jeden, k_datu=DNES)
+
+    assert v["kurzovy_rozdil"] == pytest.approx(0.0)
+    assert v["porizovaci_cena"] == pytest.approx(1800.0), "a pořizovací cena je jiná než pravdivá"
+
+
+def test_realizovany_obchod_ma_taky_rozpad():
+    """Prodej se ocení kurzem dne prodeje, nákup kurzem dne nákupu.
+
+    Spočítat obojí jedním kurzem znamená schovat kurzový výsledek
+    uzavřených obchodů — a ten je na rozdíl od nerealizovaného už
+    definitivní.
+    """
+    led = Ledger()
+    led.add(tx("2024-01-02", TxType.BUY, symbol="X", quantity=1, price=100, currency="USD"))
+    led.add(tx("2024-06-02", TxType.SELL, symbol="X", quantity=1, price=100, currency="USD"))
+
+    v = led.valuation_czk({}, KURZY, k_datu=DNES)
+
+    assert v["realizovany_zisk"] == pytest.approx(-100.0), "100 USD za 19 místo za 20"
+    assert v["vykon_aktiva"] == pytest.approx(0.0)
+    assert v["kurzovy_rozdil"] == pytest.approx(-100.0)
+
+
+def test_vklad_se_pocita_kurzem_dne_vkladu():
+    """"Vloženo" se nesmí měnit, když jste nic nevložili.
+
+    Přepočíst staré vklady dnešním kurzem znamená, že se referenční
+    hodnota celé evidence hýbe s dolarem — a výnos proti ní pak nic
+    neříká.
+    """
+    led = Ledger()
+    led.add(tx("2024-01-02", TxType.DEPOSIT, amount=1000, currency="USD"))
+    assert led.valuation_czk({}, KURZY, k_datu=DNES)["vlozeno"] == pytest.approx(20_000.0)
+
+
+def test_chybejici_kurz_se_prizna_a_neshodi_prehled():
+    """Měnu bez kurzu radši vynechat než přepočíst jedna ku jedné.
+
+    Kurz 1,0 na dolarovou pozici udělá z dvaceti tisíc tisícovku a nikde
+    to není poznat. Vynechaný řádek je vidět, tichý dvacetinásobek ne.
+    """
+    led = Ledger()
+    led.add(tx("2024-01-02", TxType.BUY, symbol="X", quantity=1, price=100, currency="USD"))
+    led.add(tx("2024-01-02", TxType.BUY, symbol="Z", quantity=1, price=100, currency="ISK"))
+
+    v = led.valuation_czk({"X": 100.0, "Z": 100.0}, KURZY, k_datu=DNES)
+
+    assert v["bez_kurzu"] == ["ISK"]
+    assert v["pozic"] == 1, "islandská pozice do součtů nevstoupila"
+    assert v["hodnota"] == pytest.approx(1800.0)
+    assert v["vykon_aktiva"] + v["kurzovy_rozdil"] == pytest.approx(
+        v["nerealizovany_zisk"] + v["realizovany_zisk"]
+    ), "rovnost rozpadu musí platit i nad zúženou množinou"
+
+
+def test_kazda_davka_ma_vlastni_kurz_nakupu():
+    """Přikoupení nesmí přepsat kurz starší dávky.
+
+    Je to táž vlastnost jako u časového testu: dávka si nese své datum,
+    a tedy i svůj kurz. Zprůměrovat je znamená rozmazat obojí.
+    """
+    led = Ledger()
+    led.add(tx("2024-01-02", TxType.BUY, symbol="X", quantity=1, price=100, currency="USD"))
+    led.add(tx("2024-06-02", TxType.BUY, symbol="X", quantity=1, price=100, currency="USD"))
+
+    v = led.valuation_czk({"X": 100.0}, KURZY, k_datu=DNES)
+    kurzy_davek = [p["kurz_nakup"] for p in v["pozice"]]
+
+    assert sorted(kurzy_davek) == [19.0, 20.0]
+    assert v["porizovaci_cena"] == pytest.approx(3900.0)
+
+
+def test_expozice_ukazuje_kolik_portfolia_visi_na_kurzu():
+    """Rozpad říká, co kurz udělal; expozice, co ještě může."""
+    led = Ledger()
+    led.add(tx("2024-01-02", TxType.BUY, symbol="X", quantity=1, price=100, currency="USD"))
+    led.add(tx("2024-01-02", TxType.BUY, symbol="E", quantity=2, price=36, currency="EUR"))
+
+    v = led.valuation_czk({"X": 100.0, "E": 36.0}, KURZY, k_datu=DNES)
+    podily = {m["mena"]: m["podil_pct"] for m in v["meny"]}
+
+    assert podily["USD"] == pytest.approx(50.0)
+    assert podily["EUR"] == pytest.approx(50.0)
