@@ -52,6 +52,43 @@ or use trading bots"*, a *„external solutions, such as API wrappers or
 custom scripts"* označuje za porušení podmínek. Neoficiální
 `degiro-connector` existuje, ale hrozí zablokováním účtu.
 
+Ceník ★★ — `degiro.cz/data/pdf/cs/Prehled_poplatku.pdf`, „Rates from:
+01-01-2026", entita flatexDEGIRO Bank Dutch Branch:
+
+| Položka | Sazba |
+|---|---|
+| **ETF Selection** (na Tradegate) | 0 EUR + 1 EUR manipulační = **1 EUR** |
+| Ostatní ETF, ETN, ETC | 2 EUR + 1 EUR = **3 EUR** |
+| Akcie NASDAQ, NYSE | 1 EUR + 1 EUR = **2 EUR** |
+| Akcie XETRA, LSE, Euronext, Tradegate, SIX, Vídeň, Varšava | **3,90 EUR** |
+| Akcie Praha (BCPP) | 20 Kč + 20 Kč = **40 Kč** |
+| **Převody mezi EUR a CZK** | **zdarma** (poznámka 2, s. 8) |
+| AutoFX ostatní páry | 0,25 %; manuální 10 EUR + 0,25 % |
+| Connectivity | 2,50 EUR ročně za zahraniční burzu, strop 0,25 % hodnoty účtu; **Praha a ETF Selection zdarma** |
+| Převod portfolia ven | **20 EUR za pozici** + externí náklady |
+| Real-time data | Euronext, Tradegate, Frankfurt zdarma; Praha L1 5 EUR/měs., XETRA a LSE 10 EUR/měs. |
+
+**Ta konverze zdarma je pro korunového investora podstatná** — u ostatních
+brokerů bývá měnová marže větší položka než samotná provize a ve srovnáních
+se na ni zapomíná.
+
+### Saxo Bank — ceník částečně ★★
+
+Entita pro ČR: **Saxo Bank A/S, organizační složka**, IČO 28949587.
+Custody Classic **0,15 % ročně** na akcie a ETF **+ DPH (25 % pro
+rezidenty EU)**. Měnová konverze **0,25 %** od středu trhu. Převod pozic
+ven **50 EUR za ISIN, max. 160 EUR**. US akcie a ETF „již od 1 USD".
+
+**Tabulku provizí po jednotlivých burzách se získat nepodařilo** — Saxo ji
+načítá skriptem a sama upozorňuje, že závazný je až trade ticket
+v platformě. Minimum pro Xetru tedy neznáme.
+
+### Fio ★★
+
+Na **účtu DIP stojí obchod do 500 EUR jen 1,98 EUR**, což je pro
+pravidelný nákup německých ETF relevantní sazba. Měnovou marži Fio
+nevyčísluje.
+
 ### XTB API zrušilo ★★
 
 Nápověda XTB: *„API access is no longer available. The service was
@@ -186,12 +223,11 @@ někdo nevytáhl znovu jako fakt:
   což je právě důvod, proč prošlo. Jestli to tak je, nevíme — a **stojí
   za to si to ověřit**, protože kdyby to platilo, paper účet by tu chybu
   neodhalil.
-* Celý ceník **Saxo** (0,08 % min. 1 USD, custody 0,15 % + DPH, FX
-  0,25 %, rate limity, IČ organizační složky).
-* Celý ceník **DEGIRO** (handling 1 EUR, connectivity 2,50 EUR, transfer
-  out 20 EUR za pozici) i tvrzení o „čtyřech vnitřních rozporech" na jejich
-  webu.
-* Tabulky **Fio, KB, Raiffeisenbank** včetně sazeb a dat účinnosti.
+* Tvrzení o **„čtyřech vnitřních rozporech na degiro.cz"**. Domnělý rozpor
+  u konverze EUR/CZK je ve skutečnosti výjimka uvedená přímo v ceníku.
+* **Provize Saxo po burzách** (0,08 % min. 1 USD) — tuhle část se nepodařilo
+  ověřit ani na druhý pokus. Custody, konverze a IČO už ověřené jsou, viz výše.
+* Tabulky **KB a Raiffeisenbank** včetně sazeb a dat účinnosti.
 * **XTB**: srážková daň 30 % / 35 % na omnibus účtu bez možnosti uplatnit
   smlouvu o zamezení dvojího zdanění.
 * **IBKR**: Tiered minimum 1,25 EUR, strop 1 % z obchodu, minimum
@@ -201,8 +237,9 @@ někdo nevytáhl znovu jako fakt:
 
 ## Nedotažené otázky
 
-1. Měnové marže u českých bank.
-2. Ceníky Saxo, DEGIRO, Fio, ČS, KB a RB — po odvolání zůstala díra.
+1. Měnové marže u českých bank a u Fia.
+2. Ceníky České spořitelny, KB a Raiffeisenbank — neověřeny vůbec.
+   Provize Saxo po burzách — technicky nedostupné.
 3. Zda paper účet IBKR simuluje plnění optimisticky (viz výše).
 4. Frakce u konkrétních UCITS ETF na IBKR.
 5. Zda Alpaca přijme retailového klienta z ČR — seznam zemí neveřejný.
