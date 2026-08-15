@@ -66,8 +66,11 @@ Podrobný rozbor včetně zdrojů, korelací a měřených čísel je ve
 | GLD | `IGLN.L` (ETC) | IE00B4ND3602 | 0,12 % | — | USD | 15,3 |
 | SLV | `PHAG.L` (ETC) | JE00B1VS3333 | 0,49 % | — | USD | 18,6 |
 | DBC | `ICOM.L` | IE00BDFL4P12 | 0,19 % | acc | USD | 9,1 |
-| VNQ | `IWDP.L` | IE00B1FZS350 | 0,59 % | dist | **GBp** | 17,6 |
+| VNQ | `IWDP.AS` † | IE00B1FZS350 | 0,59 % | dist | EUR | 18,6 |
 | UUP | **— díra —** | — | — | — | — | — |
+
+† Londýnská kotace téhož fondu, `IWDP.L`, je v **pencích** — do univerza
+patří ta amsterodamská. Podrobně níž v „Pozor na pence".
 
 ISIN a TER pocházejí z rešerše (justETF, KIID a prospekty emitentů), ne
 z měření. TER je křížově potvrzený polem `netExpenseRatio` z Yahoo u těch
@@ -89,12 +92,33 @@ shodě rozhoduje délka historie a obrat.
 |---|---|---|---|
 | iShares Core MSCI World | `SWDA.L` = 11 021,35 **GBp** | `IWDA.AS` = 128,96 EUR | 85,5 |
 | iShares Physical Gold | `SGLN.L` = 6 267,00 **GBp** | `IGLN.L` = 84,63 USD | 74,1 |
+| iShares Dev. Mkts Property | `IWDP.L` = 1 948,00 **GBp** | `IWDP.AS` = 22,82 EUR | 85,4 |
 
 Na výnosech se to neprojeví (podíl cen pence vykrátí), zato všude, kde se
 pracuje s **absolutní úrovní ceny**: velikost pozice v `risk.py`,
 `--min-position-value`, minimální provize v `CostModel`, ATR stopy
 v penězích. Yahoo rozlišuje `GBp` od `GBP` v poli `currency` — je to
 jediné místo, kde se to pozná automaticky.
+
+**Z celého univerza je v pencích jediný titul, `IWDP.L`.** Ověřeno polem
+`currency` u všech čtrnácti 15. 8. 2026. Zvlášť snadné je splést si
+`ITPS.L`: je v `GBP`, ne `GBp` (cena 190,28), a v tabulce je zvýrazněný
+jen proto, že není v USD. Zaměňovat GBP za pence je stejná chyba obráceně.
+
+Vypořádat se s tím jde dvěma způsoby a ten druhý je lepší:
+
+1. **dělit stovkou při načtení.** Musela by to znát každá cesta ke kódu —
+   `paper`, dashboard, `ledger.py`, broker adaptér. Jedno zapomenuté
+   místo a chyba je zpátky.
+2. **vzít jinou kotaci téhož fondu.** `IWDP.AS` je `IE00B1FZS350` v EUR,
+   tedy týž fond bez pencí, a navíc to srovnává měnu s eurovým blokem.
+   Drží to na jednom řádku seznamu symbolů — proto to tak má
+   `scripts/tydenni-report-eu.sh`.
+
+Změřeno, co pence provedou, když se nechají být: `tsmom` na jinak
+totožném univerzu dá s `IWDP.L` **6,98 %** místo 7,37 % ročně a 246
+obchodů místo 239. **Nespadne to** — jen tiše vrátí číslo, které vypadá
+stejně věrohodně jako to správné.
 
 **Ticker není fond.** `IDTM.L`, `IBTM.L` a `IUSM.DE` jsou tatáž třída
 téhož fondu (`IE00B1FZS798`) na třech burzách, ne trojice různých tříd.
@@ -120,13 +144,66 @@ to špatně). Jediné spolehlivé kritérium totožnosti je **ISIN z KID**.
 | DBC → `ICOM.L` | 9,1 roku místo ~20 (chybí 2008 i cyklus 2011–2015) |
 | TLT → `IDTL.L` | 11,6 roku místo ~23 |
 | IWM → `XRS2.DE` | 11,4 roku; Russell 2000 je v UCITS vzácný |
-| VNQ → `IWDP.L` | jiná expozice (svět místo USA) + pence |
+| VNQ → `IWDP.AS` | jiná expozice (svět místo USA); londýnská kotace navíc v pencích |
 
 Nejkratší člen řetězu určuje start portfolia: **9,1 roku** (`ICOM.L`, od
 2017-07). Po rozehřátí na dvanáctiměsíční momentum zbývá zhruba **8 let**
 společné historie proti 15+ u US univerza. Tohle **musí** do
 `deflated_sharpe_ratio` a MinTRL — kratší vzorek znamená širší interval
 spolehlivosti, ne stejný výsledek.
+
+### Změřeno: strategie tohle univerzum neporazí
+
+Přeměřeno 15. 8. 2026 konfigurací ze `scripts/tydenni-report-eu.sh`
+(kapitál 1000, `tsmom(252,252)`, `--costs default`, stop 3×ATR,
+`--max-position 0.12`, `--max-positions 10`, zlomkové akcie). Okno
+**2018-07-12 .. 2026-08-13**, tedy 2 076 barů = 8,09 roku po rozehřátí
+momenta; ve stejném okně i laťky. Plná zpráva:
+`scratchpad/mereni-eu.md`.
+
+| | CAGR | vol | Sharpe | maxDD |
+|---|---|---|---|---|
+| **`tsmom` na tomhle univerzu** | **7,37 %** | 10,7 % | 0,706 | 19,0 % |
+| koš 14 rovnoměrně, denní rebalance | 8,72 % | 9,2 % | **0,938** | 21,1 % |
+| `IWDA.AS` (MSCI World) prostě držet | 13,19 % | 15,7 % | 0,855 | 33,6 % |
+| `CSPX.AS` (S&P 500) prostě držet | **15,18 %** | 16,7 % | 0,915 | 33,6 % |
+
+Stejný obrázek jako na US univerzu: strategie **neporazí ani vlastní
+rovnoměrně vážený koš**, natož index. Mezera se nezavře ani po
+přeškálování na volatilitu laťky (na volatilitě `CSPX.AS` by strategie
+dala 11,17 % proti 15,18 %). Rozklad: volba univerza stojí **−6,46 pp**
+proti držení S&P 500, samotné časování a řízení rizika **−1,35 pp**.
+
+Statistika při poctivě započtených **672** parametrických pokusech
+(624 zděděných z předchozí diagnostiky + 48 nových):
+deflated Sharpe **0,591** → zamítá; PSR proti nule 0,976, ale PSR proti
+koši jen **0,259**; `min_track_record_length` proti koši vychází
+**nekonečno** (při Sharpe pod laťkou ho žádná délka historie neprokáže);
+bootstrap Sharpe 95 % **[0,039 ; 1,372]**; PBO **0,399** proti 0,144 na
+US datech — na kratším vzorku je volba parametrů výrazně vratší.
+
+Jediné, v čem strategie vede, je drawdown: 19 % proti 34 %.
+
+**Efektivní počet sázek je 3,00 ze 14** (průměrná korelace 0,258,
+diverzifikační poměr 1,731). Čtrnáct titulů nejsou čtrnáct sázek.
+
+### Nákladový preset rozhoduje o všem
+
+Táž konfigurace, totéž okno, jen jiné `--costs`:
+
+| preset | CAGR | Sharpe | zaplacené provize |
+|---|---|---|---|
+| `zero` | 7,58 % | 0,727 | 0 |
+| `default` (0 provize, 5 bps skluz) | 7,37 % | 0,706 | 0 |
+| `retail_eu` (0,15 %, min 2, 10 bps) | **−5,76 %** | −0,965 | **420 USD** |
+
+Minimum 2 USD na příkaz proti pozici ~120 USD je 3,3 % na obrátku a za
+osm let sežere 42 % počátečního kapitálu. **Broker s nulovou provizí není
+detail, je to podmínka** — u UCITS ETF platí totéž, co STAV.md říká
+o IBKR.
+
+Nezměřené zůstává, o kolik jsou reálné spready UCITS verzí širší než
+u amerických originálů. Z denních barů to nezjistíte.
 
 ### Zlato a komodity jsou ETC, ne ETF
 
@@ -202,6 +279,32 @@ Volatilita je jinde o řád: `BTC-USD` 64 % ročně a propad −82 %, `ETH-USD`
 Cílování volatility v `sizing.py` tím přestává být kosmetika a kill-switch
 nastavený na akciové propady se na kryptu spustí prakticky pořád.
 
+**Změřeno (BTC+ETH, 2018-07-19 .. 2026-08-15, 2 950 barů, 365 barů/rok):**
+
+| | CAGR | Sharpe | maxDD | obchodů |
+|---|---|---|---|---|
+| `tsmom(252,252)`, `--costs binance` | 17,35 % | 0,730 | 43,9 % | 56 |
+| `tsmom(365,365)`, `--costs binance` | 11,67 % | 0,560 | 43,0 % | 22 |
+| `BTC-USD` prostě držet | **30,21 %** | **0,741** | 76,6 % | 1 |
+| BTC+ETH rovnoměrně, denní rebalance | 27,72 % | 0,706 | 76,3 % | — |
+
+**Táž odpověď jako u ETF: držení to neporazí.** Sharpe 0,730 proti 0,741
+je shoda; strategie jen půlí drawdown (44 % z 77 %). Deflated Sharpe pro
+365/365 vychází **0,063**, bootstrap Sharpe 95 % **[−0,136 ; 1,295]**
+nulu nevylučuje a MinTRL proti nule je 3 232 barů = **8,85 roku**, tedy
+o devět měsíců víc, než kolik ETH vůbec existuje. Na kryptu je tvrzení
+slabší než na ETF, ne silnější.
+
+Že 252 barů dopadlo lépe než 365, jsou dva pokusy ze dvou — vyvozovat
+z toho „na kryptu funguje kratší momentum" by bylo přesně to, proti čemu
+je `stats.py`.
+
+**Přidání krypta k ETF univerzu při rovných vahách nediverzifikuje:**
+efektivní počet sázek 3,00 ze 14 → **3,03 ze 16**. Korelace tam chybí
+(BTC s `CSPX.AS` 0,167, s `IDTL.L` 0,019), jenže BTC svou volatilitou
+pohltí tolik rizika portfolia, že se efekt nedostaví. Bez cílování
+volatility to nemá smysl.
+
 Podrobnosti k poplatkům a míchání kalendářů viz `KRYPTO.md`
 a `scratchpad/univerzum-eu.md`.
 
@@ -243,3 +346,10 @@ to slabina, jakmile budete chtít vybírat těch „nejlepších N".
 Obejít se to zatím dá jen tím, že necháte projít víc pozic a limit necháte
 na hotovosti — proto je v `tydenni-report.sh` `--max-position 0.12`
 a `--max-positions 10`.
+
+## Skripty
+
+| skript | univerzum | stav |
+|---|---|---|
+| `scripts/tydenni-report.sh` | 14 US ETF (demo, v EU nekupitelné) | `data/paper_state.json` |
+| `scripts/tydenni-report-eu.sh` | 14 UCITS titulů z tabulky výš | `data/paper_state_eu.json` |
