@@ -72,6 +72,8 @@ python3 -m trading paper \
     --state "$STATE" \
     --fractional \
     --min-position-value 2 \
+    `# --risk-per-trade tady nic neřídí: se stopem 3×ATR ho vždycky` \
+    `# přebije --max-position 0.12. Viz RiskConfig.risk_per_trade.` \
     --risk-per-trade 0.015 \
     --stop-atr 3.0 \
     --max-position 0.12 \

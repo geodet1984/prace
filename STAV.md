@@ -72,6 +72,19 @@ v tomhle projektu hrozí.
    zhruba poloviční náklady.
 6. **Malý účet tiše nefungoval** — se 100 USD a výchozím minimem pozice
    50 USD engine 1061× zamítl signál a report ukázal nulu bez vysvětlení.
+7. **Zamítnutí hlásilo špatnou příčinu** — hláška „pozice pod minimem“
+   padala i tehdy, když pozici osekala vyčerpaná hotovost. Ze 6 221
+   zamítnutí na paper účtu jich takhle bylo 4 200 a diagnostika kvůli
+   tomu dvakrát hledala chybu v nastavení minima místo v nasazení
+   kapitálu (účet běžel na 99,8 %). Sizing teď sleduje, který ze tří
+   stropů skutečně rozhodl.
+8. **`risk_per_trade` se dá nastavovat, aniž by cokoli dělal** — velikost
+   pozice je minimum ze tří stropů a nad hranicí
+   `max_position_pct × (vzdálenost stopu / cena)` vždycky ořízne expozice.
+   V `tydenni-report.sh` je hranice 0,72 %, nastaveno je 1,5 %, takže
+   hodnoty 1,5 % i 5 % dávají bit po bitu shodný výsledek. Není to vada
+   výpočtu — pořadí pojistek je záměr — ale mlčet o tom znamená nechat
+   člověka ladit parametr, který je v jeho konfiguraci mrtvý.
 
 ## Co zbývá
 

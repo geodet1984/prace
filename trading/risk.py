@@ -31,7 +31,24 @@ class RiskConfig:
     """
 
     risk_per_trade: float = 0.01
-    """Podíl kapitálu riskovaný na jednom obchodu (0.01 = 1 %)."""
+    """Podíl kapitálu riskovaný na jednom obchodu (0.01 = 1 %).
+
+    **Pozor, tenhle parametr často neřídí vůbec nic.** Velikost pozice je
+    minimum ze tří stropů a rozhoduje ten nejnižší; riziko na obchod se
+    dostane ke slovu jen tehdy, když platí::
+
+        risk_per_trade < max_position_pct × (vzdálenost stopu / cena)
+
+    Se ``stop_loss_atr_mult=3`` a ATR kolem 2 % ceny je stop asi 6 % pod
+    cenou, takže při ``max_position_pct=0.12`` je hranice zhruba 0,7 %.
+    Nastavení 1,5 % i 5 % pak dá **bit po bitu shodný výsledek** — vždycky
+    ořízne strop expozice. Změřeno na paper účtu v ``scripts/tydenni-report.sh``,
+    kde je to přesně tento případ.
+
+    Není to chyba, je to pořadí pojistek: strop expozice má přednost
+    schválně. Ale kdo ladí tenhle parametr a nic se neděje, hledá chybu
+    tam, kde není — proto to stojí tady a ne v poznámce pod čarou.
+    """
 
     stop_loss_atr_mult: float = 2.0
     """Vzdálenost stop-lossu v násobcích ATR."""
@@ -202,21 +219,42 @@ class RiskManager:
         )
         quantity = risk_amount / stop_distance
 
+        # Který strop nakonec rozhodl. Bez téhle stopy hlásí zamítnutí vždycky
+        # "pozice pod minimem", i když je skutečnou příčinou prázdná hotovost —
+        # a diagnostika pak posílá hledat chybu na špatné místo. Stálo to už
+        # dvě pátrání (viz STAV.md).
+        strop = "riziko na obchod"
+
         # Strop na expozici — i při těsném stopu nechceme celý účet v jednom titulu.
         max_by_exposure = (equity * cfg.max_position_pct) / price
-        quantity = min(quantity, max_by_exposure)
+        if max_by_exposure < quantity:
+            quantity = max_by_exposure
+            strop = "strop expozice"
 
         # A samozřejmě nelze koupit za peníze, které nemáme.
         max_by_cash = cash / price
-        quantity = min(quantity, max_by_cash)
+        if max_by_cash < quantity:
+            quantity = max_by_cash
+            strop = "vyčerpaná hotovost"
 
         if not cfg.allow_fractional:
             quantity = float(int(quantity))
 
         if quantity <= 0:
-            return SizingDecision(0.0, None, None, "nedostatek hotovosti na celou akcii")
+            duvod = (
+                f"vyčerpaná hotovost (volných {cash:,.2f})"
+                if strop == "vyčerpaná hotovost"
+                else "nedostatek hotovosti na celou akcii"
+            )
+            return SizingDecision(0.0, None, None, duvod)
 
         if quantity * price < cfg.min_position_value:
+            # Pozice je malá — ale proč? Když ji osekala hotovost, je to
+            # zpráva o účtu, ne o nastavení minima.
+            if strop == "vyčerpaná hotovost":
+                return SizingDecision(
+                    0.0, None, None, f"vyčerpaná hotovost (volných {cash:,.2f})"
+                )
             return SizingDecision(
                 0.0, None, None, f"pozice pod minimem {cfg.min_position_value:.0f}"
             )

@@ -78,6 +78,62 @@ def test_tiny_position_is_rejected():
     assert not d.approved
 
 
+def test_vycerpana_hotovost_se_nehlasi_jako_male_minimum():
+    """Zamítnutí musí pojmenovat strop, který skutečně rozhodl.
+
+    Když pozici osekala prázdná hotovost, ale hláška tvrdí "pozice pod
+    minimem", vypadá to jako špatně nastavený parametr — a ladí se něco,
+    co s příčinou nesouvisí. Diagnostika paper účtu na tomhle utopila dvě
+    pátrání: ze 6 221 zamítnutí jich 4 200 bylo hlášeno jako podlimitní
+    pozice, zatímco šlo o vyčerpaný účet nasazený z 99,8 %.
+    """
+    rm = RiskManager(
+        RiskConfig(min_position_value=50.0, max_position_pct=1.0, allow_fractional=True)
+    )
+    # Kapitál je velký, ale volné hotovosti zbylo na pár dolarů.
+    d = rm.size_position(equity=10_000, cash=3.0, price=100.0, atr=5.0, open_positions=0)
+
+    assert not d.approved
+    assert "hotovost" in d.rejected_reason, f"zavádějící důvod: {d.rejected_reason!r}"
+    assert "minimem" not in d.rejected_reason
+
+
+def test_podlimitni_pozice_se_hlasi_jako_minimum_kdyz_hotovost_je():
+    """Opačný případ: hotovosti dost, pozice je malá kvůli nastavení.
+
+    Tady je hláška o minimu správná — a nesmí ji přebít nová větev
+    o hotovosti, jinak bychom jen prohodili jednu lež za druhou.
+    """
+    rm = RiskManager(
+        RiskConfig(min_position_value=500.0, risk_per_trade=0.001, allow_fractional=True)
+    )
+    d = rm.size_position(equity=10_000, cash=10_000, price=100.0, atr=5.0, open_positions=0)
+
+    assert not d.approved
+    assert "minimem" in d.rejected_reason, f"zavádějící důvod: {d.rejected_reason!r}"
+
+
+def test_risk_per_trade_je_neucinny_pod_stropem_expozice():
+    """Zdokumentovaná past: nad určitou hodnotou parametr přestane působit.
+
+    Strop expozice má přednost schválně, ale kdo ladí ``risk_per_trade``
+    a nic se neděje, hledá chybu tam, kde není. Test to drží jako fakt,
+    aby se to nedalo tiše změnit — a aby bylo kde si přečíst proč.
+    """
+    def mnozstvi(rpt):
+        rm = RiskManager(
+            RiskConfig(risk_per_trade=rpt, max_position_pct=0.12, allow_fractional=True)
+        )
+        return rm.size_position(
+            equity=10_000, cash=10_000, price=100.0, atr=2.0, open_positions=0
+        ).quantity
+
+    # Stop je 3×ATR? Ne — výchozí 2×ATR = 4 % ceny. Hranice účinnosti je
+    # tedy 0.12 × 0.04 = 0.0048; nad ní ořízne expozice a je to jedno.
+    assert mnozstvi(0.015) == mnozstvi(0.05), "nad hranicí musí být výsledek totožný"
+    assert mnozstvi(0.001) < mnozstvi(0.015), "pod hranicí naopak působit musí"
+
+
 def test_signal_strength_scales_position():
     rm = RiskManager(RiskConfig(risk_per_trade=0.01, max_position_pct=1.0, allow_fractional=True))
     full = rm.size_position(equity=100_000, cash=100_000, price=50.0, atr=1.0, open_positions=0)
