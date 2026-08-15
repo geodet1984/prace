@@ -100,6 +100,16 @@ v tomhle projektu hrozí.
 
 **Otevřené otázky, na které zatím nepadla odpověď:**
 
+* [ ] **Přeměřit `sma_crossover`, `rsi_reversion`, `donchian_breakout`
+      a jejich směs na evropském univerzu.** Odloženo, ne zamítnuto.
+      Změřený je zatím jen `tsmom` a ten prohrál na všech třech univerzech
+      (US, EU, krypto) — viz UNIVERZUM.md. Tohle je poslední krok, který
+      může změnit odpověď na otázku, jestli je co automatizovat.
+
+      **Rozpočet pokusů je 672** (624 z diagnostiky + 48 z měření EU) a do
+      `deflated_sharpe_ratio` patří celý, ne od nuly. Nález „jedna
+      strategie vypadá dobře" bez obhájeného deflated Sharpe není nález,
+      ale očekávatelná náhoda — na 672 pokusech obzvlášť.
 * [ ] HTML report do prohlížeče místo terminálu — nabízeno, nerozhodnuto
 * [ ] Přidat BTC-USD a ETH-USD k univerzu (viz KRYPTO.md; s `--costs binance`
       a `--periods-per-year 365`)
