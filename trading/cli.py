@@ -22,6 +22,7 @@ from . import dashboard as dashboard_module
 from . import data as data_module
 from . import ensemble as ensemble_module
 from . import fx as fx_module
+from . import hlidac as hlidac_module
 from . import ledger as ledger_module
 from . import stats as stats_module
 from . import strategies
@@ -331,6 +332,60 @@ def cmd_dashboard(args) -> int:
     return dashboard_module.serve(state, host=args.host, port=args.port, ledger_path=kniha)
 
 
+def _posledni_ceny(kniha) -> dict[str, float]:
+    """Poslední známé ceny držených titulů.
+
+    Titul, ke kterému se cena nezjistí, se do slovníku prostě nedostane —
+    ocenění si s tím poradí a přizná to. Dosadit sem cokoli náhradního by
+    znamenalo odhad vydávaný za skutečnost.
+    """
+    ceny: dict[str, float] = {}
+    for symbol in kniha.holdings():
+        try:
+            df = data_module.fetch(symbol)
+            ceny[symbol] = float(df["close"].iloc[-1])
+        except (data_module.DataError, KeyError, IndexError) as exc:
+            logger.warning("%s: cenu se nepodařilo zjistit (%s)", symbol, exc)
+    return ceny
+
+
+def cmd_hlidac(args) -> int:
+    """Ozve se, jen když je co říct. Nic nedoporučuje.
+
+    Návratový kód **10** znamená „něco nového", 0 „nic". Skript kolem toho
+    se pak nemusí hrabat ve výpisu.
+    """
+    kniha = _nacti_knihu(Path(args.kniha))
+    prehled = kniha.valuation_czk(_posledni_ceny(kniha), fx_module.Kurzovnik())
+
+    stav_cesta = Path(args.stav)
+    stav = hlidac_module.Stav.nacti(stav_cesta)
+    novinky = hlidac_module.serad(
+        hlidac_module.nove(hlidac_module.zpravy(kniha, prehled, stav), stav)
+    )
+
+    if args.strucne:
+        # Jediný řádek do oznámení; delší text se do něj stejně nevejde.
+        print(hlidac_module.shrnuti(novinky))
+    elif not novinky:
+        print("\n  Nic nového od minule.\n")
+    else:
+        print(f"\n  Portfolio — {len(novinky)} nových zpráv\n")
+        for z in novinky:
+            znacka = {"chyba": "CHYBA ", "pozor": "pozor "}.get(z.zavaznost, "      ")
+            print(f"  {znacka} {z.text}")
+        print(
+            "\n  Hlídač nic nedoporučuje. Říká, co se stalo — co s tím, "
+            "rozhodujete vy.\n"
+        )
+
+    if not args.nezapisovat:
+        hlidac_module.zapamatuj(novinky, stav, prehled.get("hodnota"))
+        stav.uloz(stav_cesta)
+
+    return 10 if novinky else 0
+
+
 def cmd_ledger(args) -> int:
     """Přehled skutečného portfolia. Nic neobchoduje, jen počítá.
 
@@ -340,15 +395,7 @@ def cmd_ledger(args) -> int:
     sáhne po nejbližším starším lístku.
     """
     kniha = _nacti_knihu(Path(args.kniha))
-    drzeno = kniha.holdings()
-
-    ceny: dict[str, float] = {}
-    for symbol in drzeno:
-        try:
-            df = data_module.fetch(symbol)
-            ceny[symbol] = float(df["close"].iloc[-1])
-        except (data_module.DataError, KeyError, IndexError) as exc:
-            logger.warning("%s: cenu se nepodařilo zjistit (%s)", symbol, exc)
+    ceny = _posledni_ceny(kniha)
 
     if args.czk:
         v = kniha.valuation_czk(ceny, fx_module.Kurzovnik())
@@ -1001,6 +1048,23 @@ def build_parser() -> argparse.ArgumentParser:
     p_kon = sub.add_parser("kontrola", help="prověřit knihu a vypsat, co v ní nesedí")
     p_kon.add_argument("--kniha", default="data/portfolio.csv", help="CSV s pohyby")
     p_kon.set_defaults(func=cmd_kontrola)
+
+    p_hlid = sub.add_parser(
+        "hlidac", help="ozve se, jen když je u portfolia co říct (pro denní běh)"
+    )
+    p_hlid.add_argument("--kniha", default="data/portfolio.csv", help="CSV s pohyby")
+    p_hlid.add_argument(
+        "--stav", default="data/hlidac_stav.json",
+        help="kde si hlídač pamatuje, co už oznámil",
+    )
+    p_hlid.add_argument(
+        "--strucne", action="store_true", help="jen jedna věta, pro oznámení"
+    )
+    p_hlid.add_argument(
+        "--nezapisovat", action="store_true",
+        help="nezapamatovat si tenhle běh — na vyzkoušení, aniž by to umlčelo příště",
+    )
+    p_hlid.set_defaults(func=cmd_hlidac)
 
     p_fetch = sub.add_parser("fetch", help="stáhnout a nacachovat data")
     add_data_args(p_fetch)

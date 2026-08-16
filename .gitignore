@@ -21,3 +21,6 @@ data/*.tmp
 # Vzor účetní knihy patří do repozitáře; data/portfolio.csv se skutečnými
 # obchody schválně ne — vaše pozice nejsou nikoho jiného věc.
 !data/portfolio-vzor.csv
+# Totéž pro paměť hlídače a jeho log: je z nich vidět, co držíte a kdy.
+data/hlidac_stav.json
+data/hlidac*.log
