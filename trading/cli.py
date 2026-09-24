@@ -24,6 +24,7 @@ from . import ensemble as ensemble_module
 from . import fx as fx_module
 from . import hlidac as hlidac_module
 from . import ledger as ledger_module
+from . import pozice_investoru as pozice_module
 from . import stats as stats_module
 from . import stav_trhu as stav_trhu_module
 from . import strategies
@@ -314,7 +315,7 @@ def cmd_paper(args) -> int:
 def cmd_dashboard(args) -> int:
     """Rozjede přehled účtu v prohlížeči. Nic neobchoduje a nic neukládá."""
     state = Path(args.state)
-    if not state.exists():
+    if args.papirovy_ucet and not state.exists():
         # Server by to řekl taky, ale až v prohlížeči. Tady je to vidět hned.
         print(
             f"Varování: stav účtu {state} zatím neexistuje. Přehled se rozjede, "
@@ -330,7 +331,8 @@ def cmd_dashboard(args) -> int:
             "se v přehledu neukáže.",
             file=sys.stderr,
         )
-    return dashboard_module.serve(state, host=args.host, port=args.port, ledger_path=kniha)
+    return dashboard_module.serve(state, host=args.host, port=args.port, ledger_path=kniha,
+                                  papirovy_ucet=args.papirovy_ucet)
 
 
 def _posledni_ceny(kniha) -> dict[str, float]:
@@ -378,6 +380,12 @@ def cmd_trh(args) -> int:
         for veta in r["vety"]:
             print(f"  • {veta}")
         print(f"\n  Historie: {r['srovnani']['veta']}")
+        for zdroj in pozice_module.rozbor(symbol, stav_trhu_module.nacti(symbol)):
+            print(f"\n  Co dělají investoři ({zdroj['zdroj']}):")
+            for veta in zdroj["vety"]:
+                print(f"  • {veta}")
+            if zdroj.get("srovnani"):
+                print(f"    Historie: {zdroj['srovnani']}")
         if r["udalosti"]:
             print("\n  Kalendář za posledních 30 dní (souslednost, ne příčina):")
             for u in r["udalosti"]:
@@ -1019,6 +1027,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--kniha",
         default=None,
         help="CSV se skutečným portfoliem; bez něj se oddíl neukáže",
+    )
+    p_dash.add_argument(
+        "--papirovy-ucet", action="store_true",
+        help="ukázat i papírový účet strategie (fiktivní peníze); bez něj jen skutečné portfolio",
     )
     p_dash.set_defaults(func=cmd_dashboard)
 

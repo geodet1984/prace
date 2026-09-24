@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import time
 from datetime import date, datetime
 from functools import partial
@@ -35,6 +36,7 @@ from pathlib import Path
 
 from . import fx as fx_module
 from . import ledger as ledger_module
+from . import pozice_investoru as pozice_module
 from . import stav_trhu as stav_trhu_module
 from . import zapis_web as zapis_module
 
@@ -460,6 +462,47 @@ _TRH_PAMET: dict[tuple, tuple[float, dict]] = {}
 _TRH_PLATNOST_S = 3600
 
 
+_TICKER = re.compile(r"^\^?[A-Z0-9][A-Z0-9.\-=]{0,19}$")
+
+
+def nacti_sledovane(soubor: Path = SLEDOVANE) -> list[str]:
+    """Jen seznam ze souboru, bez titulů z knihy — ty se odebrat nedají."""
+    if not soubor.exists():
+        return []
+    tituly = []
+    for radek in soubor.read_text(encoding="utf-8").splitlines():
+        radek = radek.split("#")[0].strip().upper()
+        if radek and radek not in tituly:
+            tituly.append(radek)
+    return tituly
+
+
+def uprav_sledovane(soubor: Path, akce: str, symbol: str) -> list[str]:
+    """Přidá nebo odebere titul. Soubor zůstává čitelný a upravitelný ručně.
+
+    Ticker se kontroluje jen tvarem, ne existencí — ověření by znamenalo
+    dotaz na burzu při každém přidání. Překlep se ukáže v oddílu Stav trhu
+    jako titul, ke kterému nejsou data, a jde hned odebrat.
+    """
+    symbol = (symbol or "").strip().upper()
+    if not _TICKER.match(symbol):
+        raise ValueError(f"{symbol!r} nevypadá jako ticker (např. CSPX.AS, TSLA, ^GDAXI)")
+    tituly = nacti_sledovane(soubor)
+    if akce == "pridat" and symbol not in tituly:
+        tituly.append(symbol)
+    elif akce == "odebrat":
+        tituly = [t for t in tituly if t != symbol]
+    elif akce not in ("pridat", "odebrat"):
+        raise ValueError(f"neznámá akce {akce!r}")
+    soubor.parent.mkdir(parents=True, exist_ok=True)
+    docasny = soubor.with_suffix(".tmp")
+    docasny.write_text(
+        "# Tituly, které chcete sledovat. Jeden na řádek; spravuje je i přehled.\n"
+        + "".join(f"{t}\n" for t in tituly), encoding="utf-8")
+    docasny.replace(soubor)
+    return tituly
+
+
 def sledovane_tituly(ledger_path: Path | None, sledovane: Path = SLEDOVANE) -> list[str]:
     """Co držíte podle knihy plus seznam ze ``sledovane.txt``.
 
@@ -496,7 +539,9 @@ def trh_payload(tituly: list[str], kalendar: Path = Path("data/udalosti.csv")) -
     for symbol in tituly:
         try:
             df = stav_trhu_module.nacti(symbol)
-            rozbory.append(stav_trhu_module.rozbor(symbol, df, udalosti))
+            r = stav_trhu_module.rozbor(symbol, df, udalosti)
+            r["investori"] = pozice_module.rozbor(symbol, df)
+            rozbory.append(r)
         except Exception as exc:  # noqa: BLE001 - jeden titul nesmí shodit ostatní
             chyby.append({"symbol": symbol, "chyba": str(exc)})
     vysledek = {"tituly": rozbory, "chyby": chyby}
@@ -504,14 +549,61 @@ def trh_payload(tituly: list[str], kalendar: Path = Path("data/udalosti.csv")) -
     return vysledek
 
 
+# --- přístupy k externím zdrojům ------------------------------------------
+#
+# Uživatel si je vyplní, až bude chtít. Do té doby se zdroj přeskočí a nic
+# se nikam neposílá. Hodnoty leží v data/ mimo git.
+
+SEC_KONTAKT = Path("data/sec_kontakt.txt")
+
+
+def stav_pristupu() -> list[dict]:
+    """Co který zdroj potřebuje a jestli je vyplněné. Hodnotu nevrací celou."""
+    kontakt = pozice_module.sec_kontakt()
+    return [{
+        "id": "sec",
+        "nazev": "SEC — obchody insiderů amerických firem",
+        "potreba": "jméno a e-mail (SEC je vyžaduje u automatického stahování; "
+                   "nejde o registraci ani heslo)",
+        "vyplneno": bool(kontakt),
+        "nahled": (kontakt[:3] + "…") if kontakt else "",
+    }, {
+        "id": "cftc", "nazev": "CFTC — pozice velkých spekulantů (COT)",
+        "potreba": "nic, veřejná data", "vyplneno": True, "nahled": "",
+    }, {
+        "id": "yahoo", "nazev": "Yahoo Finance — ceny", "potreba": "nic",
+        "vyplneno": True, "nahled": "",
+    }, {
+        "id": "cnb", "nazev": "ČNB — kurzy měn", "potreba": "nic",
+        "vyplneno": True, "nahled": "",
+    }]
+
+
+def uloz_pristup(zdroj: str, hodnota: str, soubor: Path = SEC_KONTAKT) -> None:
+    """Uloží přístup. Zatím jediný zdroj, který něco potřebuje, je SEC."""
+    if zdroj != "sec":
+        raise ValueError(f"zdroj {zdroj!r} nic nepotřebuje")
+    hodnota = (hodnota or "").strip()
+    if hodnota and ("@" not in hodnota or " " not in hodnota):
+        raise ValueError("SEC chce jméno a e-mail, např. „Jan Novák jan@example.cz“")
+    soubor.parent.mkdir(parents=True, exist_ok=True)
+    if hodnota:
+        soubor.write_text(hodnota + "\n", encoding="utf-8")
+    elif soubor.exists():
+        soubor.unlink()
+
+
 class _Handler(BaseHTTPRequestHandler):
     """Read-only HTTP rozhraní. Žádná metoda kromě GET neexistuje."""
 
     server_version = "TraderDashboard"
 
-    def __init__(self, *args, state_path: Path, ledger_path: Path | None = None, **kwargs) -> None:
+    def __init__(self, *args, state_path: Path, ledger_path: Path | None = None,
+                 papirovy_ucet: bool = False, sledovane: Path = SLEDOVANE, **kwargs) -> None:
         self.state_path = state_path
         self.ledger_path = ledger_path
+        self.papirovy_ucet = papirovy_ucet
+        self.sledovane = sledovane
         super().__init__(*args, **kwargs)
 
     # Výchozí handler loguje každý request na stderr, což u stránky, která
@@ -529,6 +621,12 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_portfolio()
         elif route == "/api/trh":
             self._send_trh()
+        elif route == "/api/nastaveni":
+            self._send_json({"papirovy_ucet": self.papirovy_ucet,
+                             "kniha": self.ledger_path is not None,
+                             "pristupy": stav_pristupu()})
+        elif route == "/api/sledovane":
+            self._send_json({"tituly": nacti_sledovane(self.sledovane)})
         elif route == "/api/zapis":
             # Stránka se ptá, jestli má formulář ukázat. Bez knihy není kam psát.
             self._send_json({"povoleno": self.ledger_path is not None,
@@ -584,7 +682,7 @@ class _Handler(BaseHTTPRequestHandler):
     def _send_trh(self) -> None:
         """Stav trhu u držených a sledovaných titulů. Chyba = prázdný oddíl."""
         try:
-            payload = trh_payload(sledovane_tituly(self.ledger_path))
+            payload = trh_payload(sledovane_tituly(self.ledger_path, self.sledovane))
         except Exception as exc:  # noqa: BLE001
             logger.exception("rozbor trhu selhal")
             payload = {"tituly": [], "chyby": [{"symbol": "—", "chyba": str(exc)}]}
@@ -624,12 +722,35 @@ class _Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802 - podpis stdlib
         """Jediná zapisující cesta: účetní kniha, a jen z naší stránky."""
         route = self.path.split("?")[0]
-        if route not in ("/api/zapis", "/api/import"):
+        if route not in ("/api/zapis", "/api/import", "/api/sledovane", "/api/pristupy"):
             self._reject()
             return
         duvod = self._proc_odmitnout_zapis()
         if duvod:
             self._send_json({"chyba": duvod}, status=403)
+            return
+        if route == "/api/pristupy":
+            try:
+                delka = min(int(self.headers.get("Content-Length") or 0), 10_000)
+                data = json.loads(self.rfile.read(delka) or b"{}")
+                uloz_pristup(data.get("zdroj", ""), data.get("hodnota", ""))
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._send_json({"chyba": str(exc)}, status=400)
+                return
+            _TRH_PAMET.clear()
+            self._send_json({"pristupy": stav_pristupu()})
+            return
+        if route == "/api/sledovane":
+            try:
+                delka = min(int(self.headers.get("Content-Length") or 0), 10_000)
+                data = json.loads(self.rfile.read(delka) or b"{}")
+                tituly = uprav_sledovane(self.sledovane, data.get("akce", ""),
+                                         data.get("symbol", ""))
+            except (ValueError, json.JSONDecodeError) as exc:
+                self._send_json({"chyba": str(exc)}, status=400)
+                return
+            _TRH_PAMET.clear()
+            self._send_json({"tituly": tituly})
             return
         if self.ledger_path is None:
             self._send_json({"chyba": "přehled běží bez knihy (--kniha), není kam zapsat"},
@@ -680,12 +801,16 @@ def make_server(
     host: str = "127.0.0.1",
     port: int = 8765,
     ledger_path: str | Path | None = None,
+    papirovy_ucet: bool = False,
+    sledovane: str | Path = SLEDOVANE,
 ):
     """Sestaví server. Nespouští ho — kvůli testům."""
     handler = partial(
         _Handler,
         state_path=Path(state_path),
         ledger_path=Path(ledger_path) if ledger_path else None,
+        papirovy_ucet=papirovy_ucet,
+        sledovane=Path(sledovane),
     )
     return ThreadingHTTPServer((host, port), handler)
 
@@ -695,9 +820,10 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8765,
     ledger_path: str | Path | None = None,
+    papirovy_ucet: bool = False,
 ) -> int:
     """Spustí přehled a běží, dokud ho někdo nepřeruší."""
-    httpd = make_server(state_path, host, port, ledger_path)
+    httpd = make_server(state_path, host, port, ledger_path, papirovy_ucet)
     actual_port = httpd.server_address[1]
     # Vypisujeme "localhost", ne číselnou adresu: Safari s vynuceným HTTPS
     # (mj. anonymní okna) http://127.0.0.1 zablokuje, localhost má výjimku.

@@ -26,3 +26,5 @@ data/hlidac_stav.json
 data/hlidac*.log
 # Seznam sledovaných titulů je osobní; do gitu jde jen vzor.
 data/sledovane.txt
+# Kontakt pro SEC (jméno a e-mail) — osobní údaj.
+data/sec_kontakt.txt
