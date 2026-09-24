@@ -20,6 +20,8 @@ cd "$(dirname "$0")/.."
 
 PORT="${PORT:-8765}"
 STATE="${STATE:-data/paper_state.json}"
+# Skutečné portfolio. Nemusí existovat — založí ho první zápis z formuláře.
+KNIHA="${KNIHA:-data/portfolio.csv}"
 VENV="${VENV:-.venv}"
 BROWSER="${BROWSER:-}"
 
@@ -66,4 +68,4 @@ fi
     echo "Server nenaběhl do 10 s — otevřete $URL ručně." >&2
 ) &
 
-exec python3 -m trading dashboard --state "$STATE" --port "$PORT"
+exec python3 -m trading dashboard --state "$STATE" --port "$PORT" --kniha "$KNIHA"

@@ -325,6 +325,24 @@ footer   { animation-delay: .36s; }
 .osa { font-size: 13px; color: var(--ink-dim); }
 .osa td { border-left: none; padding: 3px 12px 3px 0; text-align: left; }
 .osa table { min-width: 0; width: auto; }
+/* ── formulář — kolonky jako v knize, ne jako v aplikaci ───────────── */
+.formular { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 16px; padding: 14px 0; }
+.formular label { display: flex; flex-direction: column; font-size: 11px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--ink-faint); gap: 3px; }
+.formular .siroke { grid-column: span 2; }
+.formular input, .formular select { font: inherit; font-size: 15px; text-transform: none; letter-spacing: 0;
+  color: var(--ink); background: transparent; border: none; border-bottom: 1px solid var(--linka);
+  padding: 4px 1px; border-radius: 0; }
+.formular input:focus, .formular select:focus { outline: none; border-bottom-color: var(--ink); }
+.tlacitka { display: flex; gap: 10px; align-items: end; }
+button { font: inherit; font-size: 14px; font-variant: small-caps; letter-spacing: .06em; cursor: pointer;
+  color: var(--ink); background: var(--papir-tmavy); border: 1px solid var(--ink); padding: 5px 14px; }
+button.potvrdit { background: var(--ink); color: var(--papir); }
+button:disabled { opacity: .5; cursor: default; }
+.nahled { border: 1px solid var(--linka); padding: 10px 14px; margin: 4px 0 10px; }
+.nahled.ok { border-color: var(--zelen-ink); }
+.nahled.chyba { border-color: var(--rumelka); color: var(--rumelka); }
+@media (max-width: 700px) { .formular { grid-template-columns: 1fr 1fr; } }
 </style>
 </head>
 <body>
@@ -410,6 +428,50 @@ footer   { animation-delay: .36s; }
         <span class="hint">tři roky od data dávky. Není to daňové poradenství, jen rozdíl dat</span>
       </div>
       <div id="p-cas"></div>
+    </section>
+  </div>
+
+  <div id="zapis" hidden>
+    <section>
+      <div class="head">
+        <h2>Zapsat do knihy</h2>
+        <span class="hint">nejdřív náhled, uloží se až po potvrzení · kniha <span id="z-kniha"></span></span>
+      </div>
+      <form id="z-form" class="formular" autocomplete="off">
+        <label>Druh
+          <select name="typ">
+            <option value="nakup">nákup</option><option value="prodej">prodej</option>
+            <option value="dividenda">dividenda</option><option value="vklad">vklad</option>
+            <option value="vyber">výběr</option><option value="poplatek">poplatek</option>
+            <option value="dan">daň</option><option value="smena">směna měny</option>
+          </select></label>
+        <label>Datum <input type="date" name="den"></label>
+        <label>Titul <input name="symbol" placeholder="CSPX.AS" list="z-tituly"></label>
+        <label>Kusů <input name="pocet" inputmode="decimal" placeholder="2"></label>
+        <label>Cena za kus <input name="cena" inputmode="decimal" placeholder="521,40"></label>
+        <label>Poplatek <input name="poplatek" inputmode="decimal" placeholder="4"></label>
+        <label>Měna
+          <select name="mena"><option>EUR</option><option>USD</option><option>CZK</option><option>GBP</option></select></label>
+        <label>Částka <input name="castka" inputmode="decimal" placeholder="u dividendy, vkladu…"></label>
+        <label class="siroke">Poznámka <input name="poznamka" placeholder="nepovinné"></label>
+        <div class="tlacitka siroke"><button type="submit">Ukázat náhled</button></div>
+      </form>
+      <datalist id="z-tituly"></datalist>
+      <div id="z-nahled"></div>
+    </section>
+
+    <section>
+      <div class="head">
+        <h2>Nahrát výpis z banky</h2>
+        <span class="hint">CSV z internetového bankovnictví; stejný výpis dvakrát nic nezdvojí</span>
+      </div>
+      <div class="formular">
+        <label class="siroke">Soubor <input type="file" id="v-soubor" accept=".csv,.txt"></label>
+        <label>Měna, když ji výpis neuvádí
+          <select id="v-mena"><option>CZK</option><option>EUR</option><option>USD</option></select></label>
+        <div class="tlacitka"><button type="button" id="v-nahled">Ukázat náhled</button></div>
+      </div>
+      <div id="v-vysledek"></div>
     </section>
   </div>
 
@@ -807,6 +869,66 @@ async function nactiTrh() {
     (json.chyby || []).map(c => `<div class="titul"><h3>${esc(c.symbol)}</h3><span class="kdy">${esc(c.chyba)}</span></div>`).join("");
 }
 
+// ── zápis do knihy ─────────────────────────────────────────────────────
+// Server zápis přijme jen s touhle hlavičkou; cizí web ji poslat nemůže.
+async function posli(cesta, telo) {
+  const res = await fetch(cesta, { method: "POST", cache: "no-store",
+    headers: { "Content-Type": "application/json", "X-Trader-Zapis": "1" },
+    body: JSON.stringify(telo) });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.chyba || res.statusText);
+  return json;
+}
+const ukaz = (id, trida, html) => { $(id).innerHTML = `<div class="nahled ${trida}">${html}</div>`; };
+const radekPohybu = p => `${esc(p.den)} · <b>${esc(p.typ)}</b> ${esc(p.symbol)}
+  ${p.pocet ? `· ${dec(p.pocet, 3)} ks à ${dec(p.cena)}` : ""} · ${dec(p.castka)} ${esc(p.mena)}
+  ${p.poplatek ? `· poplatek ${dec(p.poplatek)}` : ""}`;
+
+async function zapisFormular(potvrdit) {
+  const data = Object.fromEntries(new FormData($("z-form")).entries());
+  try {
+    const r = await posli("/api/zapis", { ...data, potvrdit });
+    if (r.duplicita) return ukaz("z-nahled", "", `Tenhle pohyb už v knize je, nic se nezapíše.<br>${radekPohybu(r.pohyb)}`);
+    if (r.ulozeno) {
+      ukaz("z-nahled", "ok", `Zapsáno. Kniha má ${r.pohybu_celkem} pohybů.<br>${radekPohybu(r.pohyb)}`);
+      $("z-form").reset();
+      return;
+    }
+    ukaz("z-nahled", "", `Zapíše se:<br>${radekPohybu(r.pohyb)}
+      <div class="tlacitka" style="margin-top:8px"><button class="potvrdit" id="z-ano">Zapsat do knihy</button>
+      <button id="z-ne">Opravit</button></div>`);
+    $("z-ano").onclick = () => zapisFormular(true);
+    $("z-ne").onclick = () => { $("z-nahled").innerHTML = ""; };
+  } catch (e) { ukaz("z-nahled", "chyba", esc(e.message)); }
+}
+
+async function importVypisu(potvrdit) {
+  const soubor = $("v-soubor").files[0];
+  if (!soubor) return ukaz("v-vysledek", "chyba", "Vyberte soubor s výpisem.");
+  try {
+    const r = await posli("/api/import", { obsah: await soubor.text(), mena: $("v-mena").value, potvrdit });
+    const mapa = Object.entries(r.mapovani).map(([nas, cizi]) => `${esc(nas)} ← ${esc(cizi)}`).join(", ");
+    const nove = r.nove.map(p => `<li>${radekPohybu(p)}</li>`).join("");
+    const presk = r.preskocene.map(x => `<li>řádek ${x.radek}: ${esc(x.duvod)}</li>`).join("");
+    if (r.ulozeno) return ukaz("v-vysledek", "ok", `Uloženo ${r.nove.length} pohybů.`);
+    ukaz("v-vysledek", "", `<div class="faint">Sloupce: ${mapa}</div>
+      <p>Nových ${r.nove.length}, už v knize ${r.uz_v_knize}.</p>
+      ${nove ? `<ul>${nove}</ul>` : ""}${presk ? `<p class="warn">Přeskočeno:</p><ul class="warn">${presk}</ul>` : ""}
+      ${r.nove.length ? `<div class="tlacitka"><button class="potvrdit" id="v-ano">Uložit ${r.nove.length} pohybů</button></div>` : ""}`);
+    if (r.nove.length) $("v-ano").onclick = () => importVypisu(true);
+  } catch (e) { ukaz("v-vysledek", "chyba", esc(e.message)); }
+}
+
+async function pripravZapis() {
+  const r = await (await fetch("/api/zapis", { cache: "no-store" })).json();
+  if (!r.povoleno) return;
+  $("zapis").hidden = false;
+  $("z-kniha").textContent = r.kniha;
+  $("z-form").elements.den.value = new Date().toISOString().slice(0, 10);
+  $("z-form").onsubmit = e => { e.preventDefault(); zapisFormular(false); };
+  $("v-nahled").onclick = () => importVypisu(false);
+}
+
 (async () => {
   try { await nacti(); stav("aktuální", false); }
   catch (e) {
@@ -816,6 +938,7 @@ async function nactiTrh() {
   // Portfolio zvlášť a bez await v řadě: kniha může chtít kurzy ze sítě
   // a papírový účet na to nemá čekat.
   nactiPortfolio().catch(() => { $("portfolio").hidden = true; });
+  pripravZapis().catch(() => {});
   nactiTrh().catch(() => { $("trh").hidden = true; });
   setInterval(() => nactiTrh().catch(() => {}), 600_000);
   setInterval(hlidej, 1500);

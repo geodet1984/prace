@@ -16,6 +16,7 @@ import pytest
 
 from trading import dashboard, strategies
 from trading import data as data_module
+from trading import ledger as ledger_module
 from trading.execution import ZERO_COST
 from trading.fx import KurzyPodleDne
 from trading.live import PaperTrader, make_config
@@ -385,3 +386,127 @@ def test_missing_state_reports_503_not_crash(tmp_path):
         httpd.shutdown()
         httpd.server_close()
         vlakno.join(timeout=5)
+
+
+# --- zápis z formuláře --------------------------------------------------
+#
+# Jediná zapisující cesta přehledu. Testy hlídají dvě věci: že nepustí nic,
+# co nepřišlo z naší stránky, a že zapsaný pohyb je týž jako z terminálu.
+
+
+def _post(url, cesta, telo, hlavicky=None):
+    h = {"Content-Type": "application/json", "X-Trader-Zapis": "1"}
+    h.update(hlavicky or {})
+    zadost = urllib.request.Request(f"{url}{cesta}", data=json.dumps(telo).encode(),
+                                    headers=h, method="POST")
+    try:
+        with urllib.request.urlopen(zadost) as odpoved:
+            return odpoved.status, json.loads(odpoved.read())
+    except urllib.error.HTTPError as chyba:
+        return chyba.code, json.loads(chyba.read() or b"{}")
+
+
+NAKUP = {"typ": "nakup", "den": "2024-05-02", "symbol": "cspx.as", "pocet": "2",
+         "cena": "521,40", "poplatek": "4", "mena": "EUR"}
+
+
+def test_nahled_nic_nezapise(server_s_knihou):
+    """Uložit se smí až po potvrzení. Překlep v ceně se má ukázat dřív,
+    než skončí v evidenci."""
+    url, kniha = server_s_knihou
+    pred = kniha.read_bytes()
+    kod, r = _post(url, "/api/zapis", NAKUP)
+    assert kod == 200 and r["ulozeno"] is False
+    assert r["pohyb"]["castka"] == pytest.approx(-1042.80)
+    assert kniha.read_bytes() == pred
+
+
+def test_potvrzeny_zapis_je_tyz_jako_z_terminalu(server_s_knihou, tmp_path):
+    """Formulář nesmí mít vlastní převod na pohyb — jinak by se nákup
+    z prohlížeče dřív nebo později choval jinak než tentýž z terminálu."""
+    from trading.cli import main
+
+    url, kniha = server_s_knihou
+    kod, r = _post(url, "/api/zapis", {**NAKUP, "potvrdit": True})
+    assert kod == 200 and r["ulozeno"] is True
+
+    druha = tmp_path / "z-terminalu.csv"
+    main(["zapis", "nakup", "--den", "2024-05-02", "--symbol", "CSPX.AS", "--pocet", "2",
+          "--cena", "521.40", "--poplatek", "4", "--mena", "EUR", "--kniha", str(druha)])
+    z_webu = [t for t in ledger_module.Ledger.from_csv(kniha).transactions
+              if t.symbol == "CSPX.AS"]
+    z_cli = ledger_module.Ledger.from_csv(druha).transactions
+    assert [t.key for t in z_webu] == [t.key for t in z_cli]
+
+
+def test_dvojklik_nezdvoji_obchod(server_s_knihou):
+    url, kniha = server_s_knihou
+    _post(url, "/api/zapis", {**NAKUP, "potvrdit": True})
+    po_prvnim = kniha.read_bytes()
+    kod, r = _post(url, "/api/zapis", {**NAKUP, "potvrdit": True})
+    assert r["duplicita"] is True
+    assert kniha.read_bytes() == po_prvnim
+
+
+def test_zapis_bez_hlavicky_stranky_je_odmitnut(server_s_knihou):
+    """Cizí web otevřený v jiném panelu smí poslat POST na localhost, ale
+    vlastní hlavičku přidat nesmí. Bez téhle pojistky by za vás mohl
+    zapsat obchod."""
+    url, kniha = server_s_knihou
+    pred = kniha.read_bytes()
+    zadost = urllib.request.Request(f"{url}/api/zapis",
+                                    data=json.dumps({**NAKUP, "potvrdit": True}).encode(),
+                                    headers={"Content-Type": "application/json"}, method="POST")
+    with pytest.raises(urllib.error.HTTPError) as chyba:
+        urllib.request.urlopen(zadost)
+    assert chyba.value.code == 403
+    assert kniha.read_bytes() == pred
+
+
+@pytest.mark.parametrize("hlavicky", [
+    {"Origin": "https://zly-web.example"},
+    {"Host": "zly-web.example"},
+])
+def test_zapis_z_cizi_adresy_je_odmitnut(server_s_knihou, hlavicky):
+    """Host a Origin jen localhost — jinak by šlo pojistku obejít
+    podvrženým DNS záznamem, který míří na 127.0.0.1."""
+    url, kniha = server_s_knihou
+    pred = kniha.read_bytes()
+    kod, _ = _post(url, "/api/zapis", {**NAKUP, "potvrdit": True}, hlavicky)
+    assert kod == 403
+    assert kniha.read_bytes() == pred
+
+
+def test_papirovy_ucet_se_dal_zapsat_neda(server_s_knihou):
+    """Výjimka je jen pro knihu. Papírový účet posouvá výhradně
+    `trading paper` — ani s hlavičkou stránky ne."""
+    url, _ = server_s_knihou
+    kod, _ = _post(url, "/api/prehled", {"potvrdit": True})
+    assert kod == 405
+
+
+def test_prodej_vic_nez_drzite_se_neulozi(server_s_knihou):
+    """Zápis, který by knihu rozbil, se musí odmítnout hned — ne uložit
+    a nechat přehled padat při každém dalším načtení."""
+    url, kniha = server_s_knihou
+    pred = kniha.read_bytes()
+    kod, r = _post(url, "/api/zapis", {"typ": "prodej", "den": "2024-05-02", "symbol": "NIC",
+                                       "pocet": "5", "cena": "10", "mena": "EUR",
+                                       "potvrdit": True})
+    assert kod == 400
+    assert kniha.read_bytes() == pred
+
+
+def test_import_ukaze_nahled_a_pak_ulozi(server_s_knihou):
+    url, kniha = server_s_knihou
+    vypis = ("Datum;Operace;Ticker;Množství;Cena za kus;Objem;Poplatek;Měna\n"
+             "15.03.2024;Nákup;IWDA.AS;5;98,15;-490,75;4,00;EUR\n")
+    pred = kniha.read_bytes()
+    kod, r = _post(url, "/api/import", {"obsah": vypis})
+    assert kod == 200 and len(r["nove"]) == 1 and r["ulozeno"] is False
+    assert kniha.read_bytes() == pred
+
+    kod, r = _post(url, "/api/import", {"obsah": vypis, "potvrdit": True})
+    assert r["ulozeno"] is True
+    kod, r = _post(url, "/api/import", {"obsah": vypis, "potvrdit": True})
+    assert r["nove"] == [] and r["uz_v_knize"] == 1, "stejný výpis dvakrát nic nezdvojí"

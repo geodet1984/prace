@@ -36,6 +36,7 @@ from pathlib import Path
 from . import fx as fx_module
 from . import ledger as ledger_module
 from . import stav_trhu as stav_trhu_module
+from . import zapis_web as zapis_module
 
 logger = logging.getLogger(__name__)
 
@@ -528,6 +529,10 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_portfolio()
         elif route == "/api/trh":
             self._send_trh()
+        elif route == "/api/zapis":
+            # Stránka se ptá, jestli má formulář ukázat. Bez knihy není kam psát.
+            self._send_json({"povoleno": self.ledger_path is not None,
+                             "kniha": str(self.ledger_path or "")})
         elif route == "/api/verze":
             self._send_json(self._versions())
         else:
@@ -605,9 +610,69 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", "0")
         self.end_headers()
 
-    # Dashboard zásadně nic nemění. Metody nejsou "nenaimplementované",
-    # jsou odmítnuté — a test to hlídá.
-    do_POST = do_PUT = do_DELETE = do_PATCH = _reject  # noqa: N815 - podpis stdlib
+    # Až na jedinou výjimku dashboard nic nemění. Metody nejsou
+    # "nenaimplementované", jsou odmítnuté — a test to hlídá.
+    do_PUT = do_DELETE = do_PATCH = _reject  # noqa: N815 - podpis stdlib
+
+    #: Hlavička, kterou posílá jen naše stránka. Prohlížeč ji cizímu webu
+    #: nedovolí přidat bez předchozího dotazu (CORS preflight) — a na ten
+    #: server neodpovídá. Bez ní by stačilo mít otevřený v jiném panelu
+    #: zlý web a ten by za vás mohl zapsat obchod na localhost.
+    ZAPIS_HLAVICKA = "X-Trader-Zapis"
+    MAX_TELO = 2_000_000
+
+    def do_POST(self) -> None:  # noqa: N802 - podpis stdlib
+        """Jediná zapisující cesta: účetní kniha, a jen z naší stránky."""
+        route = self.path.split("?")[0]
+        if route not in ("/api/zapis", "/api/import"):
+            self._reject()
+            return
+        duvod = self._proc_odmitnout_zapis()
+        if duvod:
+            self._send_json({"chyba": duvod}, status=403)
+            return
+        if self.ledger_path is None:
+            self._send_json({"chyba": "přehled běží bez knihy (--kniha), není kam zapsat"},
+                            status=409)
+            return
+        try:
+            delka = int(self.headers.get("Content-Length") or 0)
+            if delka > self.MAX_TELO:
+                self._send_json({"chyba": "požadavek je příliš velký"}, status=413)
+                return
+            data = json.loads(self.rfile.read(delka) or b"{}")
+            potvrdit = bool(data.get("potvrdit"))
+            if route == "/api/zapis":
+                vysledek = zapis_module.zapis(self.ledger_path, data, potvrdit=potvrdit)
+            else:
+                vysledek = zapis_module.import_vypisu(
+                    self.ledger_path, data.get("obsah") or "", potvrdit=potvrdit,
+                    mena=data.get("mena") or "CZK",
+                )
+        except (ledger_module.LedgerError, ValueError, KeyError) as exc:
+            self._send_json({"chyba": str(exc)}, status=400)
+            return
+        self._send_json(vysledek)
+
+    def _proc_odmitnout_zapis(self) -> str | None:
+        """Důvod k odmítnutí zápisu, nebo None.
+
+        Tři pojistky: vlastní hlavička (cizí web ji neposlal), ``Host`` jen
+        localhost (jinak by šlo přes podvržené DNS obejít stejný původ)
+        a ``Origin``, pokud ho prohlížeč pošle, taky jen localhost.
+        """
+        if self.headers.get(self.ZAPIS_HLAVICKA) != "1":
+            return "chybí hlavička stránky — zapisovat jde jen z přehledu"
+        mistni = ("localhost", "127.0.0.1", "[::1]")
+        host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
+        if host not in mistni:
+            return f"zápis jen přes localhost, ne přes {host!r}"
+        origin = self.headers.get("Origin")
+        if origin:
+            bez_schematu = origin.split("://", 1)[-1].rsplit(":", 1)[0]
+            if bez_schematu not in mistni:
+                return f"zápis z cizí stránky ({origin}) odmítnut"
+        return None
 
 
 def make_server(
