@@ -125,6 +125,12 @@ def test_soubor_s_klicem_cte_jen_vlastnik(tmp_path):
     assert oct(soubor.stat().st_mode)[-3:] == "600"
 
 
-def test_qr_obsahuje_odkaz():
+def test_qr_se_zmensi_cely_ne_jen_vyrez():
+    """S pevnou šířkou a výškou stránka při zmenšení ořízla kód na levý
+    horní roh a telefon ho nepřečetl. Musí mít viewBox a žádnou pevnou velikost."""
+    import re
+
     svg = iphone.qr_svg("http://mac.local:8766/?klic=abc")
-    assert svg.lstrip().startswith("<svg")
+    hlavicka = re.match(r"\s*<svg[^>]*>", svg).group(0)
+    assert "viewBox" in hlavicka
+    assert not re.search(r'\s(width|height)="', hlavicka)

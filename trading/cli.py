@@ -333,7 +333,7 @@ def cmd_dashboard(args) -> int:
             file=sys.stderr,
         )
     return dashboard_module.serve(state, host=args.host, port=args.port, ledger_path=kniha,
-                                  papirovy_ucet=args.papirovy_ucet)
+                                  papirovy_ucet=args.papirovy_ucet, s_rodicem=args.s_rodicem)
 
 
 def _posledni_ceny(kniha) -> dict[str, float]:
@@ -1050,6 +1050,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--papirovy-ucet", action="store_true",
         help="ukázat i papírový účet strategie (fiktivní peníze); bez něj jen skutečné portfolio",
     )
+    p_dash.add_argument("--s-rodicem", action="store_true",
+                        help="skončit spolu s procesem, který přehled spustil (pro aplikaci)")
     p_dash.set_defaults(func=cmd_dashboard)
 
     p_led = sub.add_parser("portfolio", help="přehled skutečného portfolia z účetní knihy")

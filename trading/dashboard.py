@@ -1012,8 +1012,15 @@ def serve(
     port: int = 8765,
     ledger_path: str | Path | None = None,
     papirovy_ucet: bool = False,
+    s_rodicem: bool = False,
 ) -> int:
-    """Spustí přehled a běží, dokud ho někdo nepřeruší."""
+    """Spustí přehled a běží, dokud ho někdo nepřeruší.
+
+    ``s_rodicem``: skončit, jakmile skončí proces, který přehled spustil
+    (aplikace Moje investice). Při vynuceném ukončení nebo pádu aplikace
+    by jinak jádro běželo dál jako sirotek a drželo port pro iPhone —
+    další spuštění by pak hlásilo „port obsazený".
+    """
     httpd = make_server(state_path, host, port, ledger_path, papirovy_ucet)
     actual_port = httpd.server_address[1]
     # Vypisujeme "localhost", ne číselnou adresu: Safari s vynuceným HTTPS
@@ -1026,6 +1033,22 @@ def serve(
         print(f"  Papírový účet: {state_path}  (fiktivní peníze, posouvá jen `trading paper`)")
     print("  Zapisuje se jen do knihy, a to jen formulářem po potvrzení náhledu.")
     print("  Konec: Ctrl+C\n")
+    if s_rodicem:
+        import os
+
+        rodic = os.getppid()
+
+        def hlidej_rodice() -> None:
+            while True:
+                time.sleep(2)
+                if os.getppid() != rodic:  # rodič skončil, převzal nás launchd
+                    logger.info("aplikace skončila, ukončuji jádro")
+                    httpd.sit.vypnout()
+                    os._exit(0)
+
+        import threading
+
+        threading.Thread(target=hlidej_rodice, daemon=True).start()
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:

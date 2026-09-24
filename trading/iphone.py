@@ -96,7 +96,10 @@ def qr_svg(text: str) -> str:
     import segno
 
     buf = io.BytesIO()
-    segno.make(text, error="m").save(buf, kind="svg", scale=8, border=2,
+    # omitsize: jen viewBox, bez pevné šířky a výšky. S pevnou velikostí
+    # stránka zmenšila jen výřez, ne kód — zbyl levý horní roh a telefon
+    # takový kód nepřečte.
+    segno.make(text, error="m").save(buf, kind="svg", scale=8, border=2, omitsize=True,
                                      dark="#0b1a33", light="#ffffff", xmldecl=False)
     return buf.getvalue().decode("utf-8")
 

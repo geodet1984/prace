@@ -124,8 +124,10 @@ final class Aplikace: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigatio
         p.executableURL = python
         // Port 0 = vybere volný; skutečný si přečteme z výpisu serveru.
         // Aplikace tak nekoliduje se spouštěčem z plochy ani s ničím jiným.
+        // --s-rodicem: jádro skončí i při pádu nebo vynuceném ukončení
+        // aplikace, kdy applicationWillTerminate neproběhne.
         p.arguments = ["-m", "trading", "dashboard", "--port", "0",
-                       "--kniha", "data/portfolio.csv"]
+                       "--kniha", "data/portfolio.csv", "--s-rodicem"]
         p.currentDirectoryURL = repo
         var prostredi = ProcessInfo.processInfo.environment
         prostredi["PYTHONUNBUFFERED"] = "1"
