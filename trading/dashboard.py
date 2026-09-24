@@ -829,10 +829,11 @@ def serve(
     # (mj. anonymní okna) http://127.0.0.1 zablokuje, localhost má výjimku.
     display_host = "localhost" if host == "127.0.0.1" else host
     print(f"\n  Přehled běží na http://{display_host}:{actual_port}")
-    print(f"  Stav účtu:  {state_path}")
     if ledger_path:
         print(f"  Kniha:      {ledger_path}  (skutečné portfolio, přepočet kurzy ČNB)")
-    print("  Jen ke čtení — účet posouvá výhradně `trading paper`.")
+    if papirovy_ucet:
+        print(f"  Papírový účet: {state_path}  (fiktivní peníze, posouvá jen `trading paper`)")
+    print("  Zapisuje se jen do knihy, a to jen formulářem po potvrzení náhledu.")
     print("  Konec: Ctrl+C\n")
     try:
         httpd.serve_forever()
