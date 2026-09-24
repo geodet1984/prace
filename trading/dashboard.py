@@ -683,13 +683,13 @@ class _Handler(BaseHTTPRequestHandler):
     def __init__(self, *args, state_path: Path, ledger_path: Path | None = None,
                  papirovy_ucet: bool = False, sledovane: Path = SLEDOVANE,
                  sit: iphone_module.Sit | None = None,
-                 klic_soubor: Path = iphone_module.KLIC, **kwargs) -> None:
+                 klic_soubor: Path | None = None, **kwargs) -> None:
         self.state_path = state_path
         self.ledger_path = ledger_path
         self.papirovy_ucet = papirovy_ucet
         self.sledovane = sledovane
         self.sit = sit
-        self.klic_soubor = klic_soubor
+        self.klic_soubor = klic_soubor or iphone_module.KLIC
         self._nastavit_cookie: str | None = None
         super().__init__(*args, **kwargs)
 
@@ -1063,7 +1063,11 @@ def serve(
     by jinak jádro běželo dál jako sirotek a drželo port pro iPhone —
     další spuštění by pak hlásilo „port obsazený".
     """
-    httpd = make_server(state_path, host, port, ledger_path, papirovy_ucet)
+    # Poslouchá-li přehled rovnou do sítě (NAS), druhý posluchač pro iPhone
+    # je zbytečný — celý server už klíč vyžaduje.
+    mistni = host in ("127.0.0.1", "localhost", "::1")
+    httpd = make_server(state_path, host, port, ledger_path, papirovy_ucet,
+                        sit_zapnout=mistni)
     actual_port = httpd.server_address[1]
     # Vypisujeme "localhost", ne číselnou adresu: Safari s vynuceným HTTPS
     # (mj. anonymní okna) http://127.0.0.1 zablokuje, localhost má výjimku.

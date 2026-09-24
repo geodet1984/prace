@@ -23,6 +23,7 @@ from . import data as data_module
 from . import ensemble as ensemble_module
 from . import fx as fx_module
 from . import hlidac as hlidac_module
+from . import iphone as iphone_module
 from . import isin as isin_module
 from . import ledger as ledger_module
 from . import pozice_investoru as pozice_module
@@ -333,6 +334,14 @@ def cmd_dashboard(args) -> int:
             "se v přehledu neukáže.",
             file=sys.stderr,
         )
+    # Server v síti (NAS): bez klíče by se k němu nedostal nikdo, ani
+    # vlastník. Klíč se proto založí sám a párovací odkaz vypíše
+    # `trading parovani`.
+    if args.host not in ("127.0.0.1", "localhost", "::1") and not iphone_module.nacti_klic():
+        iphone_module.novy_klic()
+        print("Vytvořen přístupový klíč. Odkaz pro spárování: "
+              "python -m trading parovani --adresa http://<adresa-NASu>:" f"{args.port}",
+              file=sys.stderr)
     return dashboard_module.serve(state, host=args.host, port=args.port, ledger_path=kniha,
                                   papirovy_ucet=args.papirovy_ucet, s_rodicem=args.s_rodicem)
 
@@ -401,6 +410,27 @@ def cmd_trh(args) -> int:
                 reakce = "—" if u["reakce"] is None else f"{u['reakce'] * 100:+.1f} %"
                 print(f"    {u['den']}  {u['udalost']:<10} první den po: {reakce}")
     print("\n  Popis a historická četnost, ne předpověď ani doporučení.\n")
+    return 0
+
+
+def cmd_parovani(args) -> int:
+    """Vypíše odkaz a QR kód pro spárování zařízení se serverem (NAS).
+
+    Na serveru se přístupy nenastavují ve stránce — ta je z jiného zařízení
+    než ze serveru samotného vždy „cizí". Proto příkaz: spustí se na NASu
+    (v kontejneru) a QR kód se naskenuje přímo z jeho výpisu.
+    """
+    klic = iphone_module.nacti_klic()
+    if args.novy or not klic:
+        klic = iphone_module.novy_klic()
+        print("Nový klíč — zařízení spárovaná se starým tím ztratila přístup.\n")
+    odkaz = f"{args.adresa.rstrip('/')}/?klic={klic}"
+    print(f"Odkaz pro spárování:\n\n  {odkaz}\n")
+    import segno
+
+    segno.make(odkaz, error="m").terminal(compact=True)
+    print("\nNaskenujte fotoaparátem iPhonu, v Safari pak Sdílet → Přidat na plochu.")
+    print("Na Macu stačí odkaz jednou otevřít v prohlížeči, nebo ho zadat v aplikaci.")
     return 0
 
 
@@ -1134,6 +1164,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_kon = sub.add_parser("kontrola", help="prověřit knihu a vypsat, co v ní nesedí")
     p_kon.add_argument("--kniha", default="data/portfolio.csv", help="CSV s pohyby")
     p_kon.set_defaults(func=cmd_kontrola)
+
+    p_par = sub.add_parser("parovani", help="odkaz a QR kód pro spárování zařízení se serverem")
+    p_par.add_argument("--adresa", required=True,
+                       help="adresa serveru, jak ji uvidí iPhone, např. http://192.168.1.50:8766")
+    p_par.add_argument("--novy", action="store_true",
+                       help="vyměnit klíč; dosud spárovaná zařízení ztratí přístup")
+    p_par.set_defaults(func=cmd_parovani)
 
     p_hlid = sub.add_parser(
         "hlidac", help="ozve se, jen když je u portfolia co říct (pro denní běh)"

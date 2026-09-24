@@ -39,15 +39,27 @@ PORT = 8766
 COOKIE = "trader_klic"
 
 
-def nacti_klic(soubor: Path = KLIC) -> str | None:
+def _cesta(soubor: Path | None) -> Path:
+    """Cesta ke klíči až v okamžiku volání.
+
+    Výchozí hodnota parametru ``= KLIC`` by se vyhodnotila jednou při
+    načtení modulu a podstrčení v testech by se jí netýkalo — test
+    s ``--novy`` tak jednou vyměnil skutečný klíč uživatele.
+    """
+    return soubor if soubor is not None else KLIC
+
+
+def nacti_klic(soubor: Path | None = None) -> str | None:
     """Platný klíč, nebo None, když přístup z iPhonu není zapnutý."""
+    soubor = _cesta(soubor)
     if not soubor.exists():
         return None
     return soubor.read_text(encoding="utf-8").strip() or None
 
 
-def novy_klic(soubor: Path = KLIC) -> str:
+def novy_klic(soubor: Path | None = None) -> str:
     """Vytvoří (nebo vymění) klíč. Starý tím okamžitě přestane platit."""
+    soubor = _cesta(soubor)
     klic = secrets.token_urlsafe(24)
     soubor.parent.mkdir(parents=True, exist_ok=True)
     docasny = soubor.with_suffix(".tmp")
@@ -57,12 +69,13 @@ def novy_klic(soubor: Path = KLIC) -> str:
     return klic
 
 
-def vypnout(soubor: Path = KLIC) -> None:
+def vypnout(soubor: Path | None = None) -> None:
+    soubor = _cesta(soubor)
     if soubor.exists():
         soubor.unlink()
 
 
-def over(zadany: str | None, soubor: Path = KLIC) -> bool:
+def over(zadany: str | None, soubor: Path | None = None) -> bool:
     """Porovnání v konstantním čase — rychlost odmítnutí neprozradí shodu."""
     klic = nacti_klic(soubor)
     return bool(klic and zadany) and hmac.compare_digest(klic, zadany)

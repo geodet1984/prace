@@ -27,7 +27,7 @@ func zaznam(_ text: String) {
 final class Aplikace: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate {
     var okno: NSWindow!
     var web: WKWebView!
-    var server: Process?
+    var jadro: Process?
     var hlaska: NSTextField!
 
     /// Kde leží projekt. Dá se přepsat proměnnou TRADER_REPO.
@@ -38,18 +38,66 @@ final class Aplikace: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigatio
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Trader")
     }()
 
+    /// Adresa serveru (NAS) i s klíčem. Když je nastavená, aplikace si
+    /// nespouští vlastní jádro — dvě knihy vedle sebe by se rozešly.
+    var server: String? {
+        get { UserDefaults.standard.string(forKey: "server") }
+        set { UserDefaults.standard.set(newValue, forKey: "server") }
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         postavMenu()
         postavOkno()
-        spustServer()
+        if let adresa = server {
+            zaznam("připojuji k serveru \(adresa.components(separatedBy: "klic=").first ?? "")")
+            hlaska.stringValue = "Připojuji k serveru…"
+            otevri(adresa)
+        } else {
+            spustServer()
+        }
+    }
+
+    @objc func pripojitServer() {
+        let a = NSAlert()
+        a.messageText = "Připojit k serveru (NAS)"
+        a.informativeText = "Vložte párovací odkaz ze serveru (příkaz „python -m trading parovani“ "
+            + "v kontejneru). Aplikace pak nebude spouštět vlastní jádro a zobrazí data ze serveru."
+        let pole = NSTextField(frame: NSRect(x: 0, y: 0, width: 420, height: 24))
+        pole.placeholderString = "http://192.168.1.50:8766/?klic=…"
+        pole.stringValue = server ?? ""
+        a.accessoryView = pole
+        a.addButton(withTitle: "Připojit")
+        a.addButton(withTitle: "Zrušit")
+        guard a.runModal() == .alertFirstButtonReturn else { return }
+        let adresa = pole.stringValue.trimmingCharacters(in: .whitespaces)
+        guard adresa.hasPrefix("http"), adresa.contains("klic=") else {
+            chyba("Odkaz musí začínat http a obsahovat klic=…")
+            return
+        }
+        server = adresa
+        restartovat()
+    }
+
+    @objc func pouzivatMac() {
+        server = nil
+        restartovat()
+    }
+
+    func restartovat() {
+        let cesta = Bundle.main.bundlePath
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        p.arguments = ["-n", cesta]
+        try? p.run()
+        NSApp.terminate(nil)
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
 
     func applicationWillTerminate(_ notification: Notification) {
         // Bez tohohle by server běžel dál na pozadí a držel port.
-        server?.terminate()
-        server?.waitUntilExit()
+        jadro?.terminate()
+        jadro?.waitUntilExit()
     }
 
     // MARK: - okno
@@ -92,6 +140,11 @@ final class Aplikace: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigatio
         hlavni.addItem(aplikace)
         let menu = NSMenu()
         menu.addItem(withTitle: "Obnovit", action: #selector(obnovit), keyEquivalent: "r")
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Připojit k serveru (NAS)…", action: #selector(pripojitServer),
+                     keyEquivalent: "")
+        menu.addItem(withTitle: "Používat data na tomto Macu", action: #selector(pouzivatMac),
+                     keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Ukončit Moje investice",
                      action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
@@ -156,7 +209,7 @@ final class Aplikace: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigatio
         }
         do {
             try p.run()
-            server = p
+            jadro = p
         } catch {
             chyba("Jádro se nepodařilo spustit: \(error.localizedDescription)")
         }
@@ -178,7 +231,10 @@ final class Aplikace: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigatio
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!,
                  withError error: Error) {
         zaznam("načtení selhalo: \(error)")
-        chyba("Stránku se nepodařilo načíst: \(error.localizedDescription)")
+        chyba(server == nil
+              ? "Stránku se nepodařilo načíst: \(error.localizedDescription)"
+              : "Server není dostupný. Je zapnutá VPN a běží kontejner na NASu?\n"
+                + "(\(error.localizedDescription))")
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {

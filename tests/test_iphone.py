@@ -134,3 +134,41 @@ def test_qr_se_zmensi_cely_ne_jen_vyrez():
     hlavicka = re.match(r"\s*<svg[^>]*>", svg).group(0)
     assert "viewBox" in hlavicka
     assert not re.search(r'\s(width|height)="', hlavicka)
+
+
+# --- server v síti (NAS) --------------------------------------------------
+
+
+def test_parovani_vypise_odkaz_s_klicem(tmp_path, monkeypatch, capsys):
+    from trading.cli import main
+
+    monkeypatch.setattr(iphone, "KLIC", tmp_path / "k.txt")
+    assert main(["parovani", "--adresa", "http://nas:8766/"]) == 0
+    klic = iphone.nacti_klic(tmp_path / "k.txt")
+    assert f"http://nas:8766/?klic={klic}" in capsys.readouterr().out
+
+
+def test_parovani_novy_zneplatni_stary(tmp_path, monkeypatch, capsys):
+    from trading.cli import main
+
+    monkeypatch.setattr(iphone, "KLIC", tmp_path / "k.txt")
+    main(["parovani", "--adresa", "http://nas:8766"])
+    stary = iphone.nacti_klic(tmp_path / "k.txt")
+    main(["parovani", "--adresa", "http://nas:8766", "--novy"])
+    assert not iphone.over(stary, tmp_path / "k.txt")
+
+
+def test_server_v_siti_bez_klice_nepusti_nikoho(tmp_path, monkeypatch):
+    """Na NASu jde každý požadavek z jiného stroje. Bez klíče by se
+    k portfoliu nedostal nikdo — ani s ním by nesměl vidět všechno."""
+    monkeypatch.setattr(iphone, "je_mistni", lambda adresa: False)
+    httpd = dashboard.make_server(tmp_path / "s.json", port=0, klic_soubor=tmp_path / "k.txt",
+                                  sit_zapnout=False, sledovane=tmp_path / "s.txt")
+    vlakno = threading.Thread(target=httpd.serve_forever, daemon=True)
+    vlakno.start()
+    try:
+        kod, _, _ = _get(f"http://127.0.0.1:{httpd.server_address[1]}/?klic=cokoli")
+        assert kod == 401, "bez založeného klíče se nesmí projít s jakýmkoli"
+    finally:
+        httpd.shutdown()
+        httpd.server_close()

@@ -1,0 +1,30 @@
+# Moje investice na QNAP (Container Station → Aplikace → Vytvořit → vložit tento soubor).
+#
+# Kód a data leží ve sdílené složce NASu (výchozí /share/Container/trader),
+# kam je nahraje ./scripts/nahraj-na-nas.sh z Macu. Kontejner nic nesestavuje:
+# oficiální obraz Pythonu (Intel i ARM) si při prvním startu doinstaluje
+# knihovny do svazku trader-venv, další starty už jen ověří, že jsou.
+#
+# Přístup: port 8766 v síti NASu, každý požadavek jen se spárovaným klíčem.
+# Z domova i z venku přes vaši VPN. Párovací QR kód:
+#   Container Station → trader → Terminál →
+#   python -m trading parovani --adresa http://<IP-NASu>:8766
+
+services:
+  trader:
+    image: python:3.13-slim
+    container_name: trader
+    working_dir: /app
+    command: ["sh", "/app/nas/start.sh"]
+    ports:
+      - "8766:8766"
+    volumes:
+      - /share/Container/trader:/app
+      - trader-venv:/venv
+    environment:
+      TZ: Europe/Prague
+      PYTHONUNBUFFERED: "1"
+    restart: unless-stopped
+
+volumes:
+  trader-venv:
