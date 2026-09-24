@@ -1,0 +1,33 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+.venv/
+venv/
+
+# Tržní data a stav paper účtu — patří lokálně, ne do repozitáře
+data/cache/
+data/*.json
+data/*.tmp
+*.csv
+!tests/**/*.csv
+# Kalendář událostí je ručně opsaný ze zdrojů, žádný build ho neobnoví —
+# na rozdíl od cache s tržními daty do repozitáře patří.
+!data/udalosti.csv
+# data/portfolio.csv se skutečnými obchody do repozitáře nepatří —
+# vaše pozice nejsou nikoho jiného věc (*.csv výše ji už vylučuje).
+# Totéž pro paměť hlídače a jeho log: je z nich vidět, co držíte a kdy.
+data/hlidac_stav.json
+data/hlidac*.log
+# Seznam sledovaných titulů je osobní.
+data/sledovane.txt
+# Kontakt pro SEC (jméno a e-mail) — osobní údaj.
+data/sec_kontakt.txt
+# Převodní tabulka ISIN → ticker prozradí, co držíte.
+data/isin_tickery.csv
+# Klíč pro přístup z iPhonu — kdo ho má, vidí portfolio.
+data/iphone_klic.txt
+data/iphone_klic.tmp

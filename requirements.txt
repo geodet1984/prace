@@ -1,0 +1,6 @@
+pandas>=2.0
+numpy>=1.24
+yfinance>=0.2.40
+segno>=1.6        # QR kód pro spárování iPhonu
+requests>=2.31
+certifi>=2024.2

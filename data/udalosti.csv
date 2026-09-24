@@ -1,0 +1,79 @@
+# Kalendář plánovaných událostí pro --calendar / --blackout-before.
+#
+# Všechny termíny jsou OPSANÉ OD ZDROJE, ne dopočítané. Schéma zveřejnění
+# nemá pravidelnost, ze které by se dalo odvozovat — CPI za únor 2026 vyšlo
+# 11. března, za březen už 10. dubna. Odhadovat zbytek by znamenalo vyrobit
+# si data, což je přesně to, proti čemu stojí stats.py.
+#
+# Zdroje a jak to obnovit, až tenhle soubor doslouží:
+#   FOMC      federalreserve.gov/monetarypolicy/fomccalendars.htm — opsat ručně,
+#             Fed mění strukturu HTML tabulky rok od roku a osm termínů ročně
+#             je rychlejší přepsat než parsovat
+#   CPI, NFP  bls.gov/schedule/news_release/cpi.htm a .../empsit.htm
+#             ./scripts/stahni-kalendar.sh to zkusí stáhnout automaticky;
+#             BLS ale odmítá požadavky bez prohlížeče (HTTP 403), takže
+#             počítejte s tím, že to nakonec stejně opíšete ručně
+#
+# Ověřeno proti zdrojům 14. 8. 2026.
+#
+# --- FOMC ---------------------------------------------------------------
+#
+# Zapsaný je VŽDY DRUHÝ den zasedání — tehdy ve 14:00 ET vychází prohlášení
+# a tehdy se trh hne. První den pokryje --blackout-before 1.
+#
+# Termíny pro rok 2026 jsou potvrzené. Rok 2027 je PŘEDBĚŽNÝ: Fed každý
+# termín potvrzuje až na zasedání, které mu bezprostředně předchází.
+date,name,symbol
+2026-01-28,FOMC,
+2026-03-18,FOMC,
+2026-04-29,FOMC,
+2026-06-17,FOMC,
+2026-07-29,FOMC,
+2026-09-16,FOMC,
+2026-10-28,FOMC,
+2026-12-09,FOMC,
+# 2027 — předběžné, ověřte před použitím
+2027-01-27,FOMC,
+2027-03-17,FOMC,
+2027-04-28,FOMC,
+2027-06-09,FOMC,
+2027-07-28,FOMC,
+2027-09-15,FOMC,
+2027-10-27,FOMC,
+2027-12-08,FOMC,
+#
+# --- CPI ----------------------------------------------------------------
+#
+# Index spotřebitelských cen, 8:30 ET. V závorce referenční měsíc, tedy za
+# co se čísla zveřejňují — mezi ním a datem zveřejnění je zhruba měsíc.
+2026-01-13,CPI,
+2026-02-13,CPI,
+2026-03-11,CPI,
+2026-04-10,CPI,
+2026-05-12,CPI,
+2026-06-10,CPI,
+2026-07-14,CPI,
+2026-08-12,CPI,
+2026-09-11,CPI,
+2026-10-14,CPI,
+2026-11-10,CPI,
+2026-12-10,CPI,
+#
+# --- NFP ----------------------------------------------------------------
+#
+# Employment Situation, 8:30 ET. Obvykle první pátek v měsíci — ale spoléhat
+# se na to nejde, a proto je tenhle seznam opsaný a ne dopočítaný:
+#   2026-02-11  středa, posunuto
+#   2026-07-02  čtvrtek, 3. 7. je náhradní svátek za 4. července
+2026-01-09,NFP,
+2026-02-11,NFP,
+2026-03-06,NFP,
+2026-04-03,NFP,
+2026-05-08,NFP,
+2026-06-05,NFP,
+2026-07-02,NFP,
+2026-08-07,NFP,
+2026-09-04,NFP,
+2026-10-02,NFP,
+2026-11-06,NFP,
+2026-12-04,NFP,

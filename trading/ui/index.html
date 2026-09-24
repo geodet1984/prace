@@ -1,0 +1,1231 @@
+<!doctype html>
+<html lang="cs">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Moje investice</title>
+<!-- Přidání na plochu iPhonu: ikona, celá obrazovka, tmavý stavový řádek. -->
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/ikona-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Investice">
+<meta name="theme-color" content="#0b1a33">
+<style>
+/*
+  Jeden soubor, žádné závislosti. Dashboard běží na loopbacku ze standardní
+  knihovny, takže sem nesmí nic, co se stahuje z internetu — písma jsou
+  systémová (Iowan Old Style a Charter jsou součástí macOS), textury jsou
+  inline SVG.
+
+  Vzhled je účetní kniha, ne obchodní terminál — schválně. "Paper účet"
+  se vede na papíře: ztráty rumělkou, zisky lahvovou zelení, sloupce
+  oddělené linkami jako v hlavní knize. Terminál, kde svítí každé číslo,
+  přestane po chvíli sdělovat, co je důležité; tady je zvýrazněný propad
+  od maxima a vzdálenost ke stopu, protože podle těch dvou se dá něco
+  udělat. A stránka, která nevypadá jako živý trh, ani nesvádí k dojmu,
+  že jím je — ceny jsou z posledního zpracovaného baru.
+*/
+:root {
+  /* Jedna tmavá paleta bez ohledu na systém: noční modř se sytými akcenty.
+     Světlý režim tu schválně není — uživatel nemá rád moc světlé barvy,
+     hnědou ani khaki, a přehled se čte hlavně kvůli barvám čísel. */
+  color-scheme: dark;
+
+  --papir:       #0b1a33;   /* pozadí: hluboká modř */
+  --papir-tmavy: #12264a;   /* zvýrazněné plochy, najetí myší */
+  --ink:         #e8f1ff;   /* text: modrobílá, ne čistá bílá */
+  --ink-dim:     #9db8e0;
+  --ink-faint:   #6883ad;
+
+  --linka:       #2c4d82;
+  --linka-slaba: #1a3360;
+
+  --rumelka:      #ff5470;  /* ztráty — sytá korálová */
+  --rumelka-soft: #ff547020;
+  --zelen-ink:    #2ee8a6;  /* zisky — živá mátová */
+  --okr:          #ffc23d;  /* varování — jasná zlatá */
+  --modra:        #3d9bff;  /* akcent: elektrická modř */
+
+  --display: "Iowan Old Style", "Palatino", "Book Antiqua", Georgia, serif;
+  --data:    "Charter", "Iowan Old Style", Georgia, serif;
+}
+
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: radial-gradient(ellipse at top, #16305c 0%, var(--papir) 55%) fixed, var(--papir);
+  color: var(--ink);
+  font-family: var(--data);
+  font-size: 15px;
+  line-height: 1.55;
+  font-variant-numeric: lining-nums;
+  -webkit-font-smoothing: antialiased;
+}
+/* Zrno papíru. Inline SVG šum, žádný soubor navíc; průhlednost tak nízká,
+   aby textura byla cítit, ne vidět. Schválně bez mix-blend-mode — blend
+   přes fixní vrstvu nutí prohlížeč skládat celou stránku do jedné vrstvy
+   a při rolování se obsah přestane překreslovat. */
+body::before {
+  content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 1;
+  opacity: .035; filter: invert(1);
+  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="240" height="240"><filter id="n"><feTurbulence type="fractalNoise" baseFrequency="0.9" numOctaves="2"/></filter><rect width="240" height="240" filter="url(%23n)"/></svg>');
+}
+
+.wrap { max-width: 1080px; margin: 0 auto; padding: 34px 28px 72px; position: relative; z-index: 2; }
+
+/* ── záhlaví novinového typu ───────────────────────────────────────── */
+header { text-align: center; margin-bottom: 26px; }
+.datumovka {
+  display: flex; justify-content: space-between; gap: 16px;
+  font-size: 12px; letter-spacing: .14em; text-transform: uppercase;
+  color: var(--ink-dim);
+  border-top: 1px solid var(--ink); border-bottom: 1px solid var(--linka);
+  padding: 5px 2px 4px; margin-bottom: 18px;
+}
+h1 {
+  font-family: var(--display);
+  font-size: clamp(30px, 5vw, 44px);
+  font-weight: 600; letter-spacing: .02em;
+  margin: 0 0 4px;
+}
+.podtitul {
+  font-style: italic; color: var(--ink-dim); font-size: 15px; margin: 0 0 16px;
+}
+.podtitul #strategie { color: var(--ink); }
+.linka-dvojita { border: none; border-top: 3px double var(--ink); margin: 0; }
+
+/* ── řádka hlavních čísel — figury nad linkou ─────────────────────── */
+.figury {
+  display: grid; grid-template-columns: 1.6fr repeat(4, 1fr);
+  border-bottom: 3px double var(--ink);
+  margin-bottom: 26px;
+}
+.figura { padding: 18px 18px 15px; border-left: 1px solid var(--linka-slaba); }
+.figura:first-child { border-left: none; }
+.figura .label {
+  font-size: 11px; letter-spacing: .16em; text-transform: uppercase;
+  color: var(--ink-faint); white-space: nowrap;
+}
+.figura .value {
+  font-family: var(--display); font-size: 27px; margin-top: 4px;
+  font-variant-numeric: lining-nums tabular-nums; letter-spacing: -.01em;
+}
+.figura.hero .value { font-size: 40px; }
+.figura .note { font-size: 13px; color: var(--ink-dim); margin-top: 2px; font-variant-numeric: tabular-nums; }
+@media (max-width: 860px) {
+  .figury { grid-template-columns: 1fr 1fr; }
+  .figura.hero { grid-column: span 2; }
+  .figura:nth-child(odd) { border-left: none; }
+  .figura { border-top: 1px solid var(--linka-slaba); }
+  .figura.hero { border-top: none; }
+}
+
+.up   { color: var(--zelen-ink); }
+.down { color: var(--rumelka); }
+.warn { color: var(--okr); }
+.dim   { color: var(--ink-dim); }
+.faint { color: var(--ink-faint); }
+
+/* ── oddíly ────────────────────────────────────────────────────────── */
+section { margin-bottom: 30px; }
+.head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 14px;
+  border-bottom: 1px solid var(--ink);
+  padding-bottom: 5px; margin-bottom: 2px;
+}
+.head h2 {
+  font-family: var(--display); font-size: 16px; font-weight: 600;
+  letter-spacing: .12em; text-transform: uppercase; margin: 0;
+}
+.head .hint { font-size: 12.5px; font-style: italic; color: var(--ink-faint); text-align: right; }
+
+/* ── za povšimnutí — marginálie s ručičkou ────────────────────────── */
+.warnings {
+  border: 1px solid var(--rumelka);
+  outline: 3px double var(--rumelka); outline-offset: 3px;
+  background: var(--rumelka-soft);
+  padding: 14px 20px 14px 16px; margin: 0 4px 30px;
+}
+.warnings h2 {
+  font-family: var(--display); font-size: 13px; letter-spacing: .18em;
+  text-transform: uppercase; color: var(--rumelka); margin: 0 0 8px;
+}
+.warnings ul { margin: 0; padding: 0; list-style: none; }
+.warnings li { margin: 6px 0; padding-left: 30px; position: relative; }
+.warnings li::before { content: "☞"; position: absolute; left: 2px; color: var(--rumelka); }
+
+/* ── graf — rytina ─────────────────────────────────────────────────── */
+.chart { width: 100%; height: 230px; display: block; margin-top: 8px; }
+.chart .grid  { stroke: var(--linka-slaba); stroke-width: 1; }
+.chart .curve { fill: none; stroke: var(--ink); stroke-width: 1.6; stroke-linejoin: round; }
+.chart .fill  { fill: url(#srafura); }
+.chart .base  { stroke: var(--rumelka); stroke-width: 1; stroke-dasharray: 2 4; opacity: .8; }
+.chart text   { fill: var(--ink-faint); font-family: var(--data); font-size: 11px; font-variant-numeric: tabular-nums; }
+.chart .srafa { stroke: var(--ink); stroke-width: .7; opacity: .30; }
+
+/* ── tabulky — hlavní kniha ───────────────────────────────────────── */
+/* Na užším okně se tabulka nesmí uříznout — poslední sloupce (vzdálenost
+   ke stopu, důvod výstupu) jsou přesně ty, kvůli kterým se sem člověk dívá.
+   Roluje tabulka, ne celá stránka. */
+.scroll { overflow-x: auto; }
+table {
+  width: 100%; min-width: 640px; border-collapse: collapse;
+  font-size: 13.5px; font-variant-numeric: lining-nums tabular-nums;
+}
+th {
+  text-align: right; font-weight: 400; font-size: 11px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--ink-faint);
+  padding: 8px 12px 6px; border-bottom: 1px solid var(--ink); white-space: nowrap;
+}
+td {
+  text-align: right; padding: 7px 12px;
+  border-bottom: 1px solid var(--linka-slaba);
+  border-left: 1px solid var(--linka-slaba);   /* sloupcové linky jako v účetní knize */
+  white-space: nowrap;
+}
+td:first-child { border-left: none; }
+tr:last-child td { border-bottom: 1px solid var(--linka); }
+tbody tr:hover td { background: var(--papir-tmavy); }
+th:first-child, td:first-child { text-align: left; }
+.sym { font-family: var(--display); font-weight: 600; letter-spacing: .04em; }
+.duvod { font-variant: small-caps; letter-spacing: .05em; color: var(--ink-dim); }
+.duvod.stop { color: var(--rumelka); }
+
+/* Proužek "kolik zbývá ke stopu" — číslo samo o sobě se špatně porovnává
+   napříč řádky, pruh se čte jedním pohledem. */
+.gauge {
+  display: inline-block; width: 54px; height: 4px; background: var(--linka-slaba);
+  overflow: hidden; vertical-align: middle; margin-left: 8px;
+}
+.gauge i { display: block; height: 100%; background: var(--zelen-ink); }
+.gauge i.near { background: var(--okr); }
+.gauge i.hot  { background: var(--rumelka); }
+
+/* ── statistika ────────────────────────────────────────────────────── */
+.stats {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  border-bottom: 1px solid var(--linka);
+}
+.stat { padding: 12px 14px 10px; border-left: 1px solid var(--linka-slaba); }
+.stat:first-child { border-left: none; }
+.stat .k { font-size: 10.5px; letter-spacing: .12em; text-transform: uppercase; color: var(--ink-faint); white-space: nowrap; }
+.stat .v { font-family: var(--display); font-size: 20px; margin-top: 2px; font-variant-numeric: lining-nums tabular-nums; }
+@media (max-width: 860px) { .stat { border-top: 1px solid var(--linka-slaba); } }
+
+/* ── skutečné portfolio ────────────────────────────────────────────── */
+/* Vlastní kniha je jiný druh dokumentu než papírový účet: tam se zkouší,
+   tady se účtuje. Oddíl proto začíná dělicí vinětou a má vlastní záhlaví,
+   aby si nikdo nespletl fiktivní peníze se skutečnými. */
+#portfolio[hidden] { display: none; }
+.predel {
+  display: flex; align-items: center; gap: 16px;
+  margin: 52px 0 22px; color: var(--ink-dim);
+}
+.predel::before, .predel::after {
+  content: ""; flex: 1; border-top: 3px double var(--ink); opacity: .5;
+}
+.predel span {
+  font-family: var(--display); font-size: 12px; letter-spacing: .22em;
+  text-transform: uppercase; white-space: nowrap;
+}
+
+/* Rozpad zhodnocení: dvě knihy vedle sebe. Vlevo podle druhu, vpravo podle
+   příčiny. Je to **totéž číslo** rozepsané dvakrát — proto vedle sebe
+   a proto má každý sloupec vlastní součtovou čáru. Sečíst je dohromady by
+   znamenalo započítat tytéž peníze dvakrát a to je přesně chyba, které
+   tenhle layout brání. */
+/* minmax(0, …), ne 1fr: implicitní minimum gridu je "šířka obsahu", a protože
+   buňky tabulek v celém dokumentu nezalamují, roztlačila by dlouhá poznámka
+   pod čarou sloupec tak, že by čísla skončila mimo obrazovku. */
+.rozpady { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 34px; }
+@media (max-width: 760px) { .rozpady { grid-template-columns: minmax(0, 1fr); gap: 26px; } }
+.rozpad h3 {
+  font-family: var(--display); font-size: 11.5px; font-weight: 600;
+  letter-spacing: .16em; text-transform: uppercase; color: var(--ink-faint);
+  margin: 14px 0 2px; border-bottom: 1px solid var(--linka-slaba); padding-bottom: 4px;
+}
+.rozpad table { min-width: 0; }
+.rozpad td { border-left: none; }
+.rozpad tr.soucet td {
+  border-top: 1px solid var(--ink); border-bottom: 3px double var(--ink);
+  font-family: var(--display); font-size: 16px; padding-top: 9px;
+}
+.rozpad tr.podcarou td {
+  border-bottom: none; color: var(--ink-faint); font-size: 12.5px; padding-top: 9px;
+  /* Vysvětlivka je věta, ne číslo — musí zalomit. Globální `nowrap` na td
+     je kvůli tabulkám s čísly a tady by udělal řádek přes celou obrazovku. */
+  white-space: normal; line-height: 1.5;
+}
+.rozpad .popis { text-align: left; font-variant: small-caps; letter-spacing: .04em; }
+
+/* Podíl měn — proužek, ne koláč. Koláč o dvou dílech nesdělí nic, co by
+   pruh neřekl líp, a na papíře vypadá jako výsečový graf z prezentace. */
+.meny { display: flex; margin: 12px 0 4px; height: 10px; border: 1px solid var(--linka); }
+.meny i { display: block; height: 100%; }
+.meny i:nth-child(odd)  { background: var(--ink-dim); }
+.meny i:nth-child(even) { background: var(--linka); }
+.meny-popis { font-size: 12.5px; color: var(--ink-dim); font-variant-numeric: tabular-nums; }
+
+/* ── tiráž ─────────────────────────────────────────────────────────── */
+footer {
+  margin-top: 44px; text-align: center;
+  color: var(--ink-faint); font-size: 12.5px; font-style: italic; line-height: 1.7;
+}
+footer .fleuron { font-style: normal; font-size: 15px; color: var(--ink-dim); display: block; margin-bottom: 8px; }
+footer code { font-family: ui-monospace, Menlo, monospace; font-style: normal; font-size: 11.5px; color: var(--ink-dim); }
+
+.error { color: var(--rumelka); }
+.empty { color: var(--ink-faint); padding: 20px 16px; text-align: center; font-style: italic; }
+
+/* ── stav spojení v datumovce ─────────────────────────────────────── */
+.dot {
+  display: inline-block; width: 7px; height: 7px; margin-right: 7px;
+  background: var(--zelen-ink); transform: rotate(45deg);
+}
+.dot.stale { background: var(--ink-faint); }
+
+/* ── nádech při načtení ────────────────────────────────────────────── */
+/* Jediná orchestrace: stránka se prosákne jako inkoust, odshora dolů.
+   Data se pak mění bez animací — obnovuje se každou vteřinu a půl
+   a cokoli pohyblivého by z klidné stránky udělalo blikající. */
+@keyframes prosaknuti { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
+header, .figury, section, footer, .warnings { animation: prosaknuti .45s ease-out backwards; }
+.figury  { animation-delay: .06s; }
+section:nth-of-type(1) { animation-delay: .12s; }
+section:nth-of-type(2) { animation-delay: .18s; }
+section:nth-of-type(3) { animation-delay: .24s; }
+section:nth-of-type(4) { animation-delay: .30s; }
+footer   { animation-delay: .36s; }
+@media (prefers-reduced-motion: reduce) { header, .figury, section, footer, .warnings { animation: none; } }
+
+/* Účetní kniha se má umět vytisknout. */
+@media print {
+  body::before, .dot { display: none; }
+  .wrap { padding: 0; }
+  body { font-size: 12px; }
+}
+/* ── stav trhu ─────────────────────────────────────────────────────── */
+.titul { padding: 14px 0 16px; border-bottom: 1px solid var(--linka-slaba); }
+.titul:last-child { border-bottom: none; }
+.titul h3 { font-family: var(--display); font-size: 18px; margin: 0 0 2px; letter-spacing: .03em; }
+.titul .kdy { font-size: 12.5px; color: var(--ink-faint); font-style: italic; }
+.titul ul { margin: 8px 0; padding-left: 18px; }
+.titul li { margin: 2px 0; }
+.stitek { display: inline-block; font-variant: small-caps; letter-spacing: .05em; font-size: 13px;
+  border: 1px solid var(--linka); padding: 0 7px; margin-right: 6px; color: var(--ink-dim); }
+.historie { background: var(--papir-tmavy); padding: 9px 12px; margin: 8px 0; font-size: 14px; }
+.osa { font-size: 13px; color: var(--ink-dim); }
+.osa td { border-left: none; padding: 3px 12px 3px 0; text-align: left; }
+.osa table { min-width: 0; width: auto; }
+/* ── formulář — kolonky jako v knize, ne jako v aplikaci ───────────── */
+.formular { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px 16px; padding: 14px 0; }
+.formular label { display: flex; flex-direction: column; font-size: 11px; letter-spacing: .12em;
+  text-transform: uppercase; color: var(--ink-faint); gap: 3px; }
+.formular .siroke { grid-column: span 2; }
+.formular input, .formular select { font: inherit; font-size: 15px; text-transform: none; letter-spacing: 0;
+  color: var(--ink); background: transparent; border: none; border-bottom: 1px solid var(--linka);
+  padding: 4px 1px; border-radius: 0; }
+.formular input:focus, .formular select:focus { outline: none; border-bottom-color: var(--ink); }
+.tlacitka { display: flex; gap: 10px; align-items: end; }
+button { font: inherit; font-size: 14px; font-variant: small-caps; letter-spacing: .06em; cursor: pointer;
+  color: var(--ink); background: var(--papir-tmavy); border: 1px solid var(--ink); padding: 5px 14px; }
+button.potvrdit { background: var(--ink); color: var(--papir); }
+button:disabled { opacity: .5; cursor: default; }
+.nahled { border: 1px solid var(--linka); padding: 10px 14px; margin: 4px 0 10px; }
+.nahled.ok { border-color: var(--zelen-ink); }
+.nahled.chyba { border-color: var(--rumelka); color: var(--rumelka); }
+@media (max-width: 700px) { .formular { grid-template-columns: 1fr 1fr; } }
+/* ── modré akcenty ─────────────────────────────────────────────────── */
+h1, .head h2 { color: #ffffff; }
+.head { border-bottom-color: var(--modra); }
+.linka-dvojita, .figury { border-color: var(--modra) !important; }
+.chart .curve { stroke: var(--modra); stroke-width: 2; }
+.chart .srafa { stroke: var(--modra); opacity: .35; }
+.stitek { color: var(--modra); border-color: var(--modra); }
+.historie { border-left: 3px solid var(--modra); }
+button { border-color: var(--modra); background: var(--papir-tmavy); }
+button.potvrdit { background: var(--modra); color: #04122a; border-color: var(--modra); }
+.formular input:focus, .formular select:focus { border-bottom-color: var(--modra); }
+.dot { background: var(--zelen-ink); }
+.investori { margin-top: 10px; }
+button.male { font-size: 12px; padding: 1px 8px; margin-left: 10px; vertical-align: middle; }
+/* ── jednotná výška polí ──────────────────────────────────────────────
+   Textové pole, výběr, datum i soubor mají od systému každý jinou výšku
+   a vnitřní odsazení, takže řádky formuláře „skákaly". Všem se proto
+   nastaví stejná výška a odsazení a výběru vlastní šipka; tlačítka se
+   zarovnají na spodní linku řádku. */
+.formular { align-items: end; }
+.formular input, .formular select {
+  height: 40px; line-height: 40px; padding: 0 2px; margin: 0;
+  font-size: 16px; box-sizing: border-box; width: 100%;
+  -webkit-appearance: none; appearance: none;
+}
+.formular select {
+  padding-right: 22px; cursor: pointer;
+  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8"><path d="M1 1l5 5 5-5" fill="none" stroke="%233d9bff" stroke-width="2"/></svg>') no-repeat right 4px center;
+}
+.formular select option { background: #0b1a33; color: #e8f1ff; }
+.formular input[type="date"]::-webkit-datetime-edit { padding: 0; line-height: 40px; }
+.formular input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(.8) sepia(1) hue-rotate(180deg) saturate(4); cursor: pointer; }
+.formular input[type="file"] { line-height: normal; padding-top: 7px; border-bottom: 1px solid var(--linka); }
+.formular input[type="file"]::file-selector-button {
+  font: inherit; font-size: 14px; font-variant: small-caps; letter-spacing: .06em;
+  color: var(--ink); background: var(--papir-tmavy); border: 1px solid var(--modra);
+  padding: 3px 12px; margin-right: 10px; cursor: pointer; }
+.formular .tlacitka { height: 40px; align-items: center; }
+.formular .tlacitka button, .formular > .tlacitka button { height: 36px; padding: 0 16px; }
+.formular label { gap: 4px; }
+/* ── párování iPhonu ───────────────────────────────────────────────── */
+.parovani { display: flex; gap: 26px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+.parovani .qr svg { width: 220px; height: 220px; display: block; border-radius: 10px; }
+.parovani ol { margin: 0; padding-left: 20px; line-height: 1.9; max-width: 460px; }
+
+/* ── telefon ───────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .wrap { padding: calc(14px + env(safe-area-inset-top)) 14px 40px; }
+  h1 { font-size: 30px; }
+  .datumovka { font-size: 10px; letter-spacing: .08em; }
+  .datumovka span:first-child { display: none; }
+  .formular { grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+  .formular .siroke { grid-column: span 2; }
+  .head { flex-wrap: wrap; }
+  .head .hint { text-align: left; }
+  .titul h3 { font-size: 17px; }
+}
+/* ── grafy ─────────────────────────────────────────────────────────── */
+.chart .cara { fill: none; stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .cara.cena, .chart .cara.hodnota { stroke: var(--modra); }
+.chart .cara.vlozeno { stroke: var(--ink-faint); stroke-dasharray: 5 4; stroke-width: 1.6; }
+.chart .znacka { fill: var(--zelen-ink); stroke: var(--papir); stroke-width: 2; }
+.chart.maly { height: 180px; margin: 4px 0 8px; }
+.obdobi { display: flex; gap: 6px; margin-top: 8px; }
+.obdobi button.zvoleno { background: var(--modra); color: #04122a; }
+.legenda::before { content: ""; display: inline-block; width: 18px; height: 0; margin: 0 5px 3px 8px;
+  border-top: 2px solid var(--modra); vertical-align: middle; }
+.legenda.l-vlozeno::before { border-top: 2px dashed var(--ink-faint); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="datumovka">
+      <span>vaše portfolio · ceny Yahoo Finance, kurzy ČNB</span>
+      <span id="dnes"></span>
+      <span><span class="dot" id="dot"></span><span id="stav">načítám</span></span>
+    </div>
+    <h1>Moje investice</h1>
+    <hr class="linka-dvojita">
+  </header>
+
+  <div id="prazdno" class="empty" hidden>
+    Kniha je zatím prázdná. Zapište první nákup formulářem níže, nebo nahrajte výpis z banky.
+  </div>
+
+  <!-- Papírový účet strategie: fiktivní peníze. Ukáže se jen s přepínačem
+       --papirovy-ucet; jinak by se na stránce pletl se skutečnými penězi. -->
+  <div id="papir" hidden>
+  <div class="head"><h2>Papírový účet — fiktivní peníze</h2>
+    <span class="hint">strategie <span id="strategie">…</span> · <span id="bar">—</span></span></div>
+  <div id="chyba"></div>
+  <div class="figury" id="karty"></div>
+  <div id="varovani"></div>
+
+  <section>
+    <div class="head">
+      <h2>Realizovaný kapitál</h2>
+      <span class="hint">jen uzavřené obchody — otevřené pozice se projeví až při zavření</span>
+    </div>
+    <svg class="chart" id="graf"></svg>
+  </section>
+
+  <section>
+    <div class="head">
+      <h2>Otevřené pozice</h2>
+      <span class="hint">oceněno posledním barem, ne živým trhem</span>
+    </div>
+    <div id="pozice"></div>
+  </section>
+
+  <section>
+    <div class="head"><h2>Statistika uzavřených obchodů</h2></div>
+    <div class="stats" id="statistika"></div>
+  </section>
+
+  <section>
+    <div class="head">
+      <h2>Poslední obchody</h2>
+      <span class="hint" id="pocet-obchodu"></span>
+    </div>
+    <div id="obchody"></div>
+  </section>
+  </div>
+
+  <div id="portfolio" hidden>
+    <div class="predel"><span>Skutečné portfolio</span></div>
+
+    <header>
+      <p class="podtitul" style="margin-bottom:10px">
+        z účetní knihy <span id="kniha-soubor" class="dim"></span>,
+        přepočteno kurzy ČNB ke dni každého pohybu
+      </p>
+      <hr class="linka-dvojita">
+    </header>
+
+    <div class="figury" id="p-karty"></div>
+    <div id="p-varovani"></div>
+
+    <section id="p-graf-oddil" hidden>
+      <div class="head">
+        <h2>Hodnota v čase</h2>
+        <span class="hint"><span class="legenda l-hodnota">majetek</span> <span class="legenda l-vlozeno">vloženo</span> · týdně, tehdejší ceny a kurzy ČNB</span>
+      </div>
+      <svg class="chart" id="p-graf"></svg>
+    </section>
+
+    <section>
+      <div class="head">
+        <h2>Rozpad zhodnocení</h2>
+        <span class="hint">totéž číslo dvakrát — podle druhu a podle příčiny; sloupce se nesčítají</span>
+      </div>
+      <div class="rozpady" id="p-rozpad"></div>
+    </section>
+
+    <section>
+      <div class="head">
+        <h2>Otevřené pozice</h2>
+        <span class="hint">po dávkách, jak se páruje FIFO — každá má vlastní kurz nákupu</span>
+      </div>
+      <div id="p-pozice"></div>
+    </section>
+
+    <section>
+      <div class="head">
+        <h2>Časový test</h2>
+        <span class="hint">tři roky od data dávky. Není to daňové poradenství, jen rozdíl dat</span>
+      </div>
+      <div id="p-cas"></div>
+    </section>
+  </div>
+
+  <div id="zapis" hidden>
+    <section>
+      <div class="head">
+        <h2>Zapsat do knihy</h2>
+        <span class="hint">nejdřív náhled, uloží se až po potvrzení · kniha <span id="z-kniha"></span></span>
+      </div>
+      <form id="z-form" class="formular" autocomplete="off">
+        <label>Druh
+          <select name="typ">
+            <option value="nakup">nákup</option><option value="prodej">prodej</option>
+            <option value="dividenda">dividenda</option><option value="vklad">vklad</option>
+            <option value="vyber">výběr</option><option value="poplatek">poplatek</option>
+            <option value="dan">daň</option><option value="smena">směna měny</option>
+          </select></label>
+        <label>Datum <input type="date" name="den"></label>
+        <label>Titul <input name="symbol" placeholder="CSPX.AS nebo ISIN" list="z-tituly"></label>
+        <label>Kusů <input name="pocet" inputmode="decimal" placeholder="2"></label>
+        <label>Cena za kus <input name="cena" inputmode="decimal" placeholder="521,40"></label>
+        <label>Poplatek <input name="poplatek" inputmode="decimal" placeholder="4"></label>
+        <label>Měna
+          <select name="mena"><option>EUR</option><option>USD</option><option>CZK</option><option>GBP</option></select></label>
+        <label>Částka <input name="castka" inputmode="decimal" placeholder="u dividendy, vkladu…"></label>
+        <label class="siroke">Poznámka <input name="poznamka" placeholder="nepovinné"></label>
+        <div class="tlacitka siroke"><button type="submit">Ukázat náhled</button></div>
+      </form>
+      <datalist id="z-tituly"></datalist>
+      <div id="z-nahled"></div>
+    </section>
+
+    <section>
+      <div class="head">
+        <h2>Nahrát výpis z banky</h2>
+        <span class="hint">CSV z internetového bankovnictví; stejný výpis dvakrát nic nezdvojí</span>
+      </div>
+      <div class="formular">
+        <label class="siroke">Soubor <input type="file" id="v-soubor" accept=".csv,.txt"></label>
+        <label>Měna, když ji výpis neuvádí
+          <select id="v-mena"><option>CZK</option><option>EUR</option><option>USD</option></select></label>
+        <div class="tlacitka"><button type="button" id="v-nahled">Ukázat náhled</button></div>
+      </div>
+      <div id="v-vysledek"></div>
+    </section>
+  </div>
+
+  <div id="trh" hidden>
+    <section>
+      <div class="head">
+        <h2>Stav trhu</h2>
+        <span class="hint">co držíte + co sledujete · popis a historická četnost, ne předpověď</span>
+      </div>
+      <form id="s-form" class="formular" autocomplete="off">
+        <label class="siroke">Sledovat titul, fond nebo index
+          <input name="symbol" placeholder="název nebo zkratka: Komerční banka, CEZ.PR, SAP, BTC-USD"></label>
+        <div class="tlacitka"><button type="submit">Hledat</button></div>
+        <div id="s-zprava" class="siroke faint"></div>
+        <div id="s-nalezeno" class="siroke"></div>
+      </form>
+      <div id="trh-obsah"></div>
+    </section>
+  </div>
+
+  <div id="pristupy-oddil">
+    <section>
+      <div class="head"><h2>Přístupy k datům</h2>
+        <span class="hint">vyplníte, až budete chtít · uloženo jen na tomhle Macu, mimo git</span></div>
+      <div id="pristupy"></div>
+      <div id="iphone" class="iphone"></div>
+    </section>
+  </div>
+
+  <footer>
+    <span class="fleuron">❦</span>
+    Do účetní knihy zapisuje jen formulář výše, a to až po potvrzení náhledu.
+    Nic se neobchoduje a nic nedoporučuje.<br>
+    Stránka se sama obnoví, když se změní stav účtu, kniha nebo <code>trading/ui/index.html</code>.
+  </footer>
+
+</div>
+
+<script>
+"use strict";
+
+// ── formátování ────────────────────────────────────────────────────────
+// Peníze zaokrouhlené na celé, procenta na desetinu. Víc míst budí dojem
+// přesnosti, kterou paper účet na stovkách obchodů nemá.
+const czk = new Intl.NumberFormat("cs-CZ", { maximumFractionDigits: 0 });
+const dec = (n, d = 2) => new Intl.NumberFormat("cs-CZ", { minimumFractionDigits: d, maximumFractionDigits: d }).format(n);
+
+const money = n => czk.format(n);
+const pct   = n => (n >= 0 ? "+" : "") + dec(n, 1) + " %";
+const sign  = n => (n >= 0 ? "up" : "down");
+const day   = s => (s ? s.slice(0, 10) : "—");
+const esc   = s => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+
+const $ = id => document.getElementById(id);
+
+// ── vykreslení ─────────────────────────────────────────────────────────
+function karty(u) {
+  const zisk = u.equity - u.initial_capital;
+  $("karty").innerHTML = `
+    <div class="figura hero">
+      <div class="label">Hodnota účtu</div>
+      <div class="value">${money(u.equity)}<span class="faint" style="font-size:18px"> USD</span></div>
+      <div class="note ${sign(zisk)}">${zisk >= 0 ? "+" : ""}${money(zisk)} &nbsp;·&nbsp; ${pct(u.total_return_pct)} od startu</div>
+    </div>
+    <div class="figura">
+      <div class="label">Propad od maxima</div>
+      <div class="value ${u.drawdown_pct > 15 ? "down" : u.drawdown_pct > 8 ? "warn" : ""}">${dec(u.drawdown_pct, 1)} %</div>
+      <div class="note">vrchol ${money(u.peak_equity)}</div>
+    </div>
+    <div class="figura">
+      <div class="label">V pozicích</div>
+      <div class="value">${money(u.invested)}</div>
+      <div class="note">${u.open_positions} pozic · hotovost ${money(u.cash)}</div>
+    </div>
+    <div class="figura">
+      <div class="label">Poplatky celkem</div>
+      <div class="value">${money(u.total_fees)}</div>
+      <div class="note">${u.pending_orders} čekajících příkazů</div>
+    </div>
+    <div class="figura">
+      <div class="label">Zamítnuté signály</div>
+      <div class="value">${czk.format(u.rejected_signals)}</div>
+      <div class="note">limity risk manageru</div>
+    </div>`;
+}
+
+function varovani(list) {
+  $("varovani").innerHTML = list.length
+    ? `<div class="warnings"><h2>Za povšimnutí</h2>
+       <ul>${list.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>`
+    : "";
+}
+
+// Graf kreslíme ručně do SVG. Knihovna by kvůli jedné čáře znamenala
+// buď CDN (které lokální server nemá), nebo vendorovaný balík v repu.
+// Výplň pod křivkou je šrafura — plocha z barevného přechodu by na
+// papíře vypadala jako cizí těleso.
+function graf(points) {
+  const svg = $("graf");
+  const body = points.filter(p => p.date);
+  if (body.length < 2) { svg.innerHTML = `<text x="20" y="30" font-style="italic">zatím míň než dva uzavřené obchody — křivka nemá co ukázat</text>`; return; }
+
+  const W = svg.clientWidth || 900, H = 230, L = 64, R = 12, T = 14, B = 24;
+  const ys = body.map(p => p.equity);
+  const base = points[0].equity;
+  let lo = Math.min(...ys, base), hi = Math.max(...ys, base);
+  const pad = (hi - lo) * 0.08 || 1;
+  lo -= pad; hi += pad;
+
+  const x = i => L + (i / (body.length - 1)) * (W - L - R);
+  const y = v => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+
+  const line = body.map((p, i) => `${i ? "L" : "M"}${x(i).toFixed(1)},${y(p.equity).toFixed(1)}`).join("");
+  const area = `${line}L${x(body.length - 1).toFixed(1)},${y(lo).toFixed(1)}L${x(0).toFixed(1)},${y(lo).toFixed(1)}Z`;
+
+  const ticks = 4, grid = [];
+  for (let i = 0; i <= ticks; i++) {
+    const v = lo + (hi - lo) * (i / ticks), yy = y(v).toFixed(1);
+    grid.push(`<line class="grid" x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}"/>
+               <text x="${L - 8}" y="${+yy + 3}" text-anchor="end">${money(v)}</text>`);
+  }
+  const labels = [0, Math.floor(body.length / 2), body.length - 1]
+    .map(i => `<text x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="${i === 0 ? "start" : i === body.length - 1 ? "end" : "middle"}">${day(body[i].date)}</text>`);
+
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = `
+    <defs><pattern id="srafura" patternUnits="userSpaceOnUse" width="5" height="5" patternTransform="rotate(45)">
+      <line class="srafa" x1="0" y1="0" x2="0" y2="5"/>
+    </pattern></defs>
+    ${grid.join("")}
+    <line class="base" x1="${L}" x2="${W - R}" y1="${y(base).toFixed(1)}" y2="${y(base).toFixed(1)}"/>
+    <path class="fill" d="${area}"/><path class="curve" d="${line}"/>
+    ${labels.join("")}`;
+}
+
+function pozice(rows) {
+  if (!rows.length) { $("pozice").innerHTML = `<div class="empty">žádné otevřené pozice</div>`; return; }
+  $("pozice").innerHTML = `<div class="scroll"><table>
+    <thead><tr>
+      <th>Symbol</th><th>Kusů</th><th>Vstup</th><th>Cena</th><th>Hodnota</th>
+      <th>Zisk</th><th>%</th><th>Stop</th><th>Ke stopu</th><th>Drženo</th>
+    </tr></thead><tbody>${rows.map(p => {
+      const d = p.stop_distance_pct;
+      const cls = d === null ? "" : d < 2 ? "hot" : d < 6 ? "near" : "";
+      const bar = d === null ? "" :
+        `<span class="gauge"><i class="${cls}" style="width:${Math.max(2, Math.min(100, d * 5))}%"></i></span>`;
+      return `<tr>
+        <td class="sym">${esc(p.symbol)}</td>
+        <td>${dec(p.quantity, 3)}</td>
+        <td class="dim">${dec(p.entry_price)}</td>
+        <td>${dec(p.price)}</td>
+        <td>${money(p.value)}</td>
+        <td class="${sign(p.pnl)}">${p.pnl >= 0 ? "+" : ""}${money(p.pnl)}</td>
+        <td class="${sign(p.pnl_pct)}">${pct(p.pnl_pct)}</td>
+        <td class="dim">${p.stop_loss === null ? "—" : dec(p.stop_loss)}</td>
+        <td>${d === null ? "—" : dec(d, 1) + " %"}${bar}</td>
+        <td class="faint">${p.days_held === null ? "—" : Math.round(p.days_held) + " d"}</td>
+      </tr>`;
+    }).join("")}</tbody></table></div>`;
+}
+
+function statistika(s) {
+  if (!s.count) { $("statistika").innerHTML = `<div class="empty">zatím žádný uzavřený obchod</div>`; return; }
+  const cell = (k, v, cls = "") => `<div class="stat"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`;
+  $("statistika").innerHTML = [
+    cell("Obchodů", s.count),
+    cell("Úspěšnost", dec(s.win_rate, 1) + " %"),
+    // Na malém účtu jsou tahle čísla v jednotkách dolarů. Zaokrouhlit je na
+    // celé jako hodnotu účtu by z rozdílu mezi +7,20 a +7,80 udělalo totéž.
+    cell("Průměrný zisk", "+" + dec(s.avg_win), "up"),
+    cell("Průměrná ztráta", dec(s.avg_loss), "down"),
+    // Bez ztrátového obchodu profit factor neexistuje. "∞" by se četlo
+    // jako kvalita strategie, ne jako málo dat.
+    cell("Profit factor", s.profit_factor === null ? "—" : dec(s.profit_factor)),
+    // Očekávaná hodnota: průměr přes všechny obchody, výhry i ztráty. Tohle
+    // je číslo, které se násobí počtem obchodů — ne úspěšnost.
+    cell("Zisk na obchod", (s.expectancy >= 0 ? "+" : "") + dec(s.expectancy), sign(s.expectancy)),
+    cell("Nejlepší", "+" + dec(s.best), "up"),
+    cell("Nejhorší", dec(s.worst), "down"),
+    cell("Průměrně drženo", s.avg_days_held === null ? "—" : Math.round(s.avg_days_held) + " d"),
+  ].join("");
+}
+
+function obchody(rows) {
+  $("pocet-obchodu").textContent = `${rows.length} celkem, zobrazeno posledních 40`;
+  if (!rows.length) { $("obchody").innerHTML = `<div class="empty">zatím žádný uzavřený obchod</div>`; return; }
+  $("obchody").innerHTML = `<div class="scroll"><table>
+    <thead><tr>
+      <th>Symbol</th><th>Vstup</th><th>Výstup</th><th>Za</th><th>Na</th>
+      <th>Zisk</th><th>%</th><th>Dní</th><th>Důvod</th>
+    </tr></thead><tbody>${rows.slice(0, 40).map(t => `<tr>
+      <td class="sym">${esc(t.symbol)}</td>
+      <td class="dim">${day(t.entry_time)}</td>
+      <td class="dim">${day(t.exit_time)}</td>
+      <td class="dim">${dec(t.entry_price)}</td>
+      <td>${dec(t.exit_price)}</td>
+      <td class="${sign(t.pnl)}">${t.pnl >= 0 ? "+" : ""}${dec(t.pnl)}</td>
+      <td class="${sign(t.return_pct)}">${pct(t.return_pct)}</td>
+      <td class="faint">${t.days_held === null ? "—" : Math.round(t.days_held)}</td>
+      <td style="text-align:left"><span class="duvod ${t.exit_reason === "stop-loss" ? "stop" : ""}">${esc(t.exit_reason || "—")}</span></td>
+    </tr>`).join("")}</tbody></table></div>`;
+}
+
+// ── skutečné portfolio ─────────────────────────────────────────────────
+// Celý smysl tohohle oddílu je jedna věta: kolik z toho, co vidíte, udělal
+// titul a kolik kurz. Proto je "z toho kurz" hned v hlavní řádce čísel,
+// ne schované v tabulce dole.
+function pKarty(s) {
+  const v = s.prehled, m = v.mena;
+  const podil = v.celkem ? Math.abs(v.kurzovy_rozdil) / Math.abs(v.celkem) * 100 : 0;
+  $("p-karty").innerHTML = `
+    <div class="figura hero">
+      <div class="label">Hodnota portfolia</div>
+      <div class="value">${money(v.hodnota)}<span class="faint" style="font-size:18px"> ${m}</span></div>
+      <div class="note">vloženo vlastních ${money(v.vlozeno)} ${m} · ${s.pohybu} pohybů</div>
+    </div>
+    <div class="figura">
+      <div class="label">Zhodnocení celkem</div>
+      <div class="value ${sign(v.celkem)}">${v.celkem >= 0 ? "+" : ""}${money(v.celkem)}</div>
+      <div class="note">${v.vlozeno ? pct(v.celkem / v.vlozeno * 100) + " z vloženého" : "—"}</div>
+    </div>
+    <div class="figura">
+      <div class="label">Z toho výkon aktiv</div>
+      <div class="value ${sign(v.vykon_aktiva)}">${v.vykon_aktiva >= 0 ? "+" : ""}${money(v.vykon_aktiva)}</div>
+      <div class="note">kdyby kurz stál na místě</div>
+    </div>
+    <div class="figura">
+      <div class="label">Z toho pohyb kurzu</div>
+      <div class="value ${sign(v.kurzovy_rozdil)}">${v.kurzovy_rozdil >= 0 ? "+" : ""}${money(v.kurzovy_rozdil)}</div>
+      <div class="note">${podil >= 1 ? dec(podil, 0) + " % z výsledku" : "měnový vliv zanedbatelný"}</div>
+    </div>
+    <div class="figura">
+      <div class="label">Otevřených titulů</div>
+      <div class="value">${czk.format(v.pozic)}</div>
+      <div class="note">${Object.entries(v.kurzy).filter(([k]) => k !== m).map(([k, r]) => k + " " + dec(r, 3)).join(" · ") || "vše v " + m}</div>
+    </div>`;
+}
+
+function pRozpad(v) {
+  const radek = (popis, castka, cls = "") =>
+    `<tr class="${cls}"><td class="popis">${popis}</td>
+       <td class="${sign(castka)}">${castka >= 0 ? "+" : ""}${money(castka)}</td></tr>`;
+
+  // Levý sloupec sčítá na "celkem", pravý na (nerealizovaný + realizovaný).
+  // Jsou to dva pohledy na tytéž peníze; kurzový rozdíl je průřez oběma
+  // ziskovými řádky vlevo, ne další položka pod nimi.
+  const zisky = v.nerealizovany_zisk + v.realizovany_zisk;
+  $("p-rozpad").innerHTML = `
+    <div class="rozpad">
+      <h3>Podle druhu</h3>
+      <table><tbody>
+        ${radek("Nerealizovaný zisk", v.nerealizovany_zisk)}
+        ${radek("Realizovaný zisk", v.realizovany_zisk)}
+        ${radek("Dividendy", v.dividendy)}
+        ${radek("Daně", v.dane)}
+        ${radek("Poplatky mimo obchody", v.poplatky)}
+        ${radek("Celkem", v.celkem, "soucet")}
+        <tr class="podcarou"><td class="popis">z toho poplatky za obchody</td>
+          <td>${money(v.poplatky_v_obchodech)}</td></tr>
+        <tr class="podcarou"><td class="popis" colspan="2">
+          Poplatky za obchody jsou už uvnitř pořizovací ceny a výnosu — proto pod čarou.</td></tr>
+      </tbody></table>
+    </div>
+    <div class="rozpad">
+      <h3>Podle příčiny</h3>
+      <table><tbody>
+        ${radek("Výkon aktiv", v.vykon_aktiva)}
+        ${radek("Pohyb kurzu", v.kurzovy_rozdil)}
+        ${radek("Zisk z pozic", zisky, "soucet")}
+        <tr class="podcarou"><td class="popis" colspan="2">
+          Sčítá se na nerealizovaný + realizovaný zisk, ne na "celkem": dividendy,
+          daně ani poplatky s pohybem ceny titulu nesouvisí. Přičíst tenhle sloupec
+          k levému by tytéž peníze započetlo dvakrát.</td></tr>
+      </tbody></table>
+    </div>`;
+}
+
+function pMeny(meny, mena) {
+  if (meny.length < 2) return "";
+  return `<div class="meny">${meny.map(m => `<i style="width:${m.podil_pct}%"></i>`).join("")}</div>
+    <div class="meny-popis">${meny.map(m =>
+      `${esc(m.mena)} ${dec(m.podil_pct, 0)} % (kurz ${dec(m.kurz, 3)})`).join(" &nbsp;·&nbsp; ")}
+      — tolik portfolia visí na kurzu, ne na trhu.</div>`;
+}
+
+function pPozice(rows, mena) {
+  if (!rows.length) { $("p-pozice").innerHTML = `<div class="empty">žádné otevřené pozice</div>`; return; }
+  $("p-pozice").innerHTML = `<div class="scroll"><table>
+    <thead><tr>
+      <th>Symbol</th><th>Kusů</th><th>Měna</th><th>Nakoupeno</th><th>Kurz tehdy</th><th>Kurz dnes</th>
+      <th>Pořizovací</th><th>Hodnota</th><th>Zisk</th><th>%</th><th>Z aktiva</th><th>Z kurzu</th>
+    </tr></thead><tbody>${rows.map(p => `<tr>
+      <td class="sym">${esc(p.symbol)}${p.bez_ceny ? ` <span class="faint" title="bez aktuální ceny, oceněno pořizovací">*</span>` : ""}</td>
+      <td>${dec(p.quantity, 3)}</td>
+      <td class="dim">${esc(p.mena)}</td>
+      <td class="dim">${esc(p.nakoupeno)}</td>
+      <td class="dim">${dec(p.kurz_nakup, 3)}</td>
+      <td>${dec(p.kurz_dnes, 3)}</td>
+      <td class="dim">${money(p.porizovaci_cena)}</td>
+      <td>${money(p.hodnota)}</td>
+      <td class="${sign(p.zisk)}">${p.zisk >= 0 ? "+" : ""}${money(p.zisk)}</td>
+      <td class="${sign(p.zisk_pct)}">${pct(p.zisk_pct)}</td>
+      <td class="${sign(p.vykon_aktiva)}">${p.vykon_aktiva >= 0 ? "+" : ""}${money(p.vykon_aktiva)}</td>
+      <td class="${sign(p.kurzovy_rozdil)}">${p.kurzovy_rozdil >= 0 ? "+" : ""}${money(p.kurzovy_rozdil)}</td>
+    </tr>`).join("")}</tbody></table></div>`;
+}
+
+function pCas(rows) {
+  if (!rows.length) { $("p-cas").innerHTML = `<div class="empty">žádné dávky k hlídání</div>`; return; }
+  $("p-cas").innerHTML = `<div class="scroll"><table>
+    <thead><tr>
+      <th>Symbol</th><th>Kusů</th><th>Nakoupeno</th><th>Osvobozeno od</th><th>Zbývá</th><th>Stav</th>
+    </tr></thead><tbody>${rows.map(r => `<tr>
+      <td class="sym">${esc(r.symbol)}</td>
+      <td>${dec(r.quantity, 3)}</td>
+      <td class="dim">${esc(r.nakoupeno)}</td>
+      <td>${esc(r.osvobozeno_od)}</td>
+      <td class="${r.splneno ? "faint" : r.dni_zbyva < 90 ? "warn" : ""}">${r.splneno ? "—" : czk.format(r.dni_zbyva) + " dní"}</td>
+      <td style="text-align:left"><span class="duvod">${r.splneno ? "prošlo" : "běží"}</span></td>
+    </tr>`).join("")}</tbody></table></div>`;
+}
+
+// ── čárový graf ────────────────────────────────────────────────────────
+// Jeden kreslič pro všechny grafy: SVG přímo ve stránce, bez knihovny
+// z internetu (přehled běží i bez připojení a na telefonu přes Wi-Fi).
+// serie: [{dny: [...], hodnoty: [...], trida: "..."}]; osa X podle data.
+function carovyGraf(svg, serie, { vyska = 230, formatY = money, znacky = [] } = {}) {
+  const vse = serie.flatMap(s => s.hodnoty).filter(v => v != null);
+  const dny = serie.flatMap(s => s.dny).map(d => +new Date(d));
+  if (vse.length < 2) { svg.innerHTML = ""; return; }
+  const W = svg.clientWidth || 700, H = vyska, L = 64, R = 14, T = 12, B = 24;
+  let lo = Math.min(...vse), hi = Math.max(...vse);
+  const pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.05 || 1; lo -= pad; hi += pad;
+  const t0 = Math.min(...dny), t1 = Math.max(...dny);
+  const x = d => L + ((+new Date(d) - t0) / ((t1 - t0) || 1)) * (W - L - R);
+  const y = v => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+  const mrizka = [0, 1, 2, 3, 4].map(i => {
+    const v = lo + (hi - lo) * i / 4, yy = y(v).toFixed(1);
+    return `<line class="grid" x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}"/>
+            <text x="${L - 8}" y="${+yy + 3}" text-anchor="end">${formatY(v)}</text>`;
+  }).join("");
+  const popisky = [t0, (t0 + t1) / 2, t1].map((t, i) =>
+    `<text x="${x(t).toFixed(1)}" y="${H - 6}" text-anchor="${["start", "middle", "end"][i]}">${new Date(t).toLocaleDateString("cs-CZ", { month: "numeric", year: "numeric" })}</text>`).join("");
+  const cary = serie.map(s => {
+    const d = s.dny.map((den, i) => s.hodnoty[i] == null ? "" : `${i ? "L" : "M"}${x(den).toFixed(1)},${y(s.hodnoty[i]).toFixed(1)}`).join("");
+    return `<path class="cara ${s.trida || ""}" d="${d}"/>`;
+  }).join("");
+  const body = znacky.map(z => `<circle class="znacka" cx="${x(z.den).toFixed(1)}" cy="${y(z.hodnota).toFixed(1)}" r="4"><title>${esc(z.popis)}</title></circle>`).join("");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = mrizka + cary + body + popisky;
+}
+
+async function nactiGrafPortfolia() {
+  const r = await (await fetch("/api/graf/portfolio", { cache: "no-store" })).json();
+  const b = r.body || [];
+  if (b.length < 2) { $("p-graf-oddil").hidden = true; return; }
+  $("p-graf-oddil").hidden = false;
+  const dny = b.map(x => x.den);
+  carovyGraf($("p-graf"), [
+    { dny, hodnoty: b.map(x => x.vlozeno), trida: "vlozeno" },
+    { dny, hodnoty: b.map(x => x.hodnota), trida: "hodnota" },
+  ]);
+}
+
+// Graf ceny u titulu: 1 rok nebo 5 let, vybírá se bez dotazu na server.
+function grafTitulu(svg, grafy, roky) {
+  const graf = grafy[String(roky)];
+  const dny = graf.dny, ceny = graf.ceny;
+  const imax = ceny.indexOf(Math.max(...ceny));
+  carovyGraf(svg, [{ dny, hodnoty: ceny, trida: "cena" }], {
+    vyska: 180, formatY: v => dec(v, v < 100 ? 2 : 0),
+    znacky: imax >= 0 ? [{ den: dny[imax], hodnota: ceny[imax], popis: `maximum ${dec(ceny[imax])} (${dny[imax]})` }] : [],
+  });
+}
+
+async function nactiPortfolio() {
+  let json;
+  try {
+    json = await (await fetch("/api/portfolio", { cache: "no-store" })).json();
+  } catch (e) {
+    // Kniha je volitelná. Nedostupný endpoint nesmí shodit zbytek stránky.
+    $("portfolio").hidden = true;
+    return;
+  }
+  if (!json || !json.vedena) { $("portfolio").hidden = true; $("prazdno").hidden = false; return; }
+  $("prazdno").hidden = true;
+
+  const v = json.prehled;
+  $("portfolio").hidden = false;
+  $("kniha-soubor").textContent = json.soubor;
+  pKarty(json);
+  $("p-varovani").innerHTML = json.upozorneni.length
+    ? `<div class="warnings"><h2>Za povšimnutí</h2>
+       <ul>${json.upozorneni.map(w => `<li>${esc(w)}</li>`).join("")}</ul></div>`
+    : "";
+  pRozpad(v);
+  pPozice(v.pozice, v.mena);
+  $("p-pozice").insertAdjacentHTML("beforeend", pMeny(v.meny, v.mena));
+  pCas(json.casovy_test);
+}
+
+// ── načítání a automatické obnovení ────────────────────────────────────
+let posledniStav = null, posledniUi = null, posledniKniha = null, data = null;
+
+async function nacti() {
+  const res = await fetch("/api/prehled", { cache: "no-store" });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.chyba || res.statusText);
+  data = json;
+
+  $("strategie").textContent = json.ucet.strategy || "—";
+  $("bar").textContent = "poslední bar " + day(json.ucet.last_bar);
+  $("chyba").innerHTML = "";
+  karty(json.ucet);
+  varovani(json.upozorneni);
+  graf(json.krivka);
+  pozice(json.pozice);
+  statistika(json.statistika);
+  obchody(json.obchody);
+}
+
+function stav(text, stale) {
+  $("stav").textContent = text;
+  $("dot").className = stale ? "dot stale" : "dot";
+}
+
+// Ptáme se po otiscích souborů, ne po datech. Když se změní šablona,
+// stránka se přenačte celá — díky tomu je editace index.html z editoru
+// vidět v prohlížeči bez jediného kliknutí.
+async function hlidej() {
+  try {
+    const v = await (await fetch("/api/verze", { cache: "no-store" })).json();
+    if (posledniUi !== null && v.ui !== posledniUi) { location.reload(); return; }
+    posledniUi = v.ui;
+    if (v.stav !== posledniStav) {
+      posledniStav = v.stav;
+      if (papirZobrazit) await nacti();
+      stav("aktuální", false);
+    }
+    // Kniha má vlastní otisk: dopsaný obchod se má projevit stejně jako
+    // pohyb účtu, aniž by se kvůli tomu přepočítával papírový přehled.
+    if (v.kniha !== posledniKniha) { posledniKniha = v.kniha; await nactiPortfolio(); }
+  } catch (e) {
+    stav("server neběží", true);
+  }
+}
+
+// ── stav trhu ──────────────────────────────────────────────────────────
+// Rozbor je pomalý (celá historie každého titulu), server ho drží hodinu.
+// Stránka se proto ptá jednou za deset minut, ne s každým tikem.
+// Co dělají konkrétní skupiny investorů (COT, insideři). Bez rozboru prázdné.
+const investori = zdroje => (zdroje || []).map(z => `<div class="investori">
+  <div class="kdy">Co dělají investoři — ${esc(z.zdroj)}</div>
+  <ul>${z.vety.map(v => `<li>${esc(v)}</li>`).join("")}</ul>
+  ${z.srovnani ? `<div class="historie">${esc(z.srovnani)}</div>` : ""}</div>`).join("");
+
+let sledovane = [];
+
+async function sledovat(akce, symbol) {
+  try {
+    const r = await posli("/api/sledovane", { akce, symbol });
+    sledovane = r.tituly;
+    $("s-zprava").textContent = akce === "pridat"
+      ? `${symbol.toUpperCase()} přidán, načítám data…` : `${symbol} odebrán.`;
+    await nactiTrh();
+    $("s-zprava").textContent = "";
+  } catch (e) { $("s-zprava").textContent = e.message; }
+}
+
+// Hledání titulu podle názvu. Výsledek se nepřidá sám — vyberete ho,
+// protože „Erste" je v Praze, ve Vídni i jinde a každá kotace má jinou měnu.
+async function hledat(dotaz) {
+  if (!dotaz) return;
+  $("s-zprava").textContent = "Hledám…";
+  $("s-nalezeno").innerHTML = "";
+  try {
+    const r = await (await fetch(`/api/hledat?q=${encodeURIComponent(dotaz)}`, { cache: "no-store" })).json();
+    if (r.chyba) throw new Error(r.chyba);
+    if (!r.vysledky.length) { $("s-zprava").textContent = `Pro „${dotaz}" nic nenalezeno.`; return; }
+    $("s-zprava").textContent = "Vyberte, kterou kotaci sledovat:";
+    $("s-nalezeno").innerHTML = `<table class="osa" style="width:100%"><tbody>${r.vysledky.map(v => `<tr>
+      <td><b>${esc(v.symbol)}</b></td><td>${esc(v.nazev)}</td>
+      <td class="faint">${esc(v.burza)} · ${esc(v.druh)}</td>
+      <td style="text-align:right">${sledovane.includes(v.symbol) ? `<span class="up">sledujete</span>`
+        : `<button type="button" class="male" onclick="vybrat('${esc(v.symbol)}')">Sledovat</button>`}</td>
+    </tr>`).join("")}</tbody></table>`;
+  } catch (e) { $("s-zprava").textContent = e.message; }
+}
+
+async function vybrat(symbol) {
+  $("s-nalezeno").innerHTML = "";
+  $("s-form").reset();
+  await sledovat("pridat", symbol);
+}
+
+async function nactiTrh() {
+  $("trh").hidden = false;
+  sledovane = (await (await fetch("/api/sledovane", { cache: "no-store" })).json()).tituly || [];
+  const json = await (await fetch("/api/trh", { cache: "no-store" })).json();
+  const tituly = json.tituly || [];
+  if (!tituly.length && !(json.chyby || []).length) {
+    $("trh-obsah").innerHTML = `<div class="empty">Zatím nic nesledujete. Přidejte titul výše, nebo zapište nákup do knihy.</div>`;
+    return;
+  }
+  const odebrat = s => sledovane.includes(s)
+    ? ` <button type="button" class="male" onclick="sledovat('odebrat','${esc(s)}')">přestat sledovat</button>` : "";
+  const karta = r => {
+    const s = r.srovnani;
+    const osa = r.udalosti.length ? `<div class="osa">Kalendář za posledních 30 dní — souslednost, ne příčina:
+      <table>${r.udalosti.map(u => `<tr><td>${esc(u.den)}</td><td>${esc(u.udalost)}</td>
+        <td class="${u.reakce === null ? "" : sign(u.reakce)}">${u.reakce === null ? "—" : pct(u.reakce * 100)}</td></tr>`).join("")}</table></div>` : "";
+    return `<div class="titul">
+      <h3>${esc(r.symbol)}${odebrat(r.symbol)}</h3><span class="kdy">k ${esc(r.den)}, cena ${dec(r.cena)}</span>
+      <div style="margin-top:6px">${Object.values(r.kategorie).map(k => `<span class="stitek">${esc(k)}</span>`).join("")}</div>
+      <ul>${r.vety.map(v => `<li>${esc(v)}</li>`).join("")}</ul>
+      ${r.graf && r.graf["1"].dny.length > 1 ? `<div class="obdobi" data-sym="${esc(r.symbol)}">
+        <button type="button" class="male zvoleno" data-let="1">1 rok</button>
+        <button type="button" class="male" data-let="5">5 let</button></div>
+        <svg class="chart maly" data-graf="${esc(r.symbol)}"></svg>` : ""}
+      <div class="historie">${esc(s.veta)}</div>${investori(r.investori)}${osa}</div>`;
+  };
+  $("trh-obsah").innerHTML = tituly.map(karta).join("") +
+    (json.chyby || []).map(c => `<div class="titul"><h3>${esc(c.symbol)}${odebrat(c.symbol)}</h3><span class="kdy">${esc(c.chyba)}</span></div>`).join("");
+
+  const podleSym = Object.fromEntries(tituly.map(r => [r.symbol, r.graf]));
+  document.querySelectorAll("svg[data-graf]").forEach(s => grafTitulu(s, podleSym[s.dataset.graf], 1));
+  document.querySelectorAll(".obdobi").forEach(o => o.querySelectorAll("button").forEach(b => b.onclick = () => {
+    o.querySelectorAll("button").forEach(x => x.classList.toggle("zvoleno", x === b));
+    grafTitulu(document.querySelector(`svg[data-graf="${o.dataset.sym}"]`), podleSym[o.dataset.sym], +b.dataset.let);
+  }));}
+
+// ── zápis do knihy ─────────────────────────────────────────────────────
+// Server zápis přijme jen s touhle hlavičkou; cizí web ji poslat nemůže.
+async function posli(cesta, telo) {
+  const res = await fetch(cesta, { method: "POST", cache: "no-store",
+    headers: { "Content-Type": "application/json", "X-Trader-Zapis": "1" },
+    body: JSON.stringify(telo) });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.chyba || res.statusText);
+  return json;
+}
+// Čeština: 1 pohyb, 2–4 pohyby, 5 a víc pohybů.
+const pohybu = n => `${n} ${n === 1 ? "pohyb" : n >= 2 && n <= 4 ? "pohyby" : "pohybů"}`;
+const ukaz = (id, trida, html) => { $(id).innerHTML = `<div class="nahled ${trida}">${html}</div>`; };
+const radekPohybu = p => `${esc(p.den)} · <b>${esc(p.typ)}</b> ${esc(p.symbol)}
+  ${p.pocet ? `· ${dec(p.pocet, 3)} ks à ${dec(p.cena)}` : ""} · ${dec(p.castka)} ${esc(p.mena)}
+  ${p.poplatek ? `· poplatek ${dec(p.poplatek)}` : ""}`;
+
+async function zapisFormular(potvrdit) {
+  const data = Object.fromEntries(new FormData($("z-form")).entries());
+  try {
+    const r = await posli("/api/zapis", { ...data, potvrdit });
+    if (r.duplicita) return ukaz("z-nahled", "", `Tenhle pohyb už v knize je, nic se nezapíše.<br>${radekPohybu(r.pohyb)}`);
+    if (r.ulozeno) {
+      ukaz("z-nahled", "ok", `Zapsáno. Kniha má ${r.pohybu_celkem} pohybů.<br>${radekPohybu(r.pohyb)}`);
+      $("z-form").reset();
+      return;
+    }
+    ukaz("z-nahled", "", `Zapíše se:<br>${radekPohybu(r.pohyb)}
+      <div class="tlacitka" style="margin-top:8px"><button class="potvrdit" id="z-ano">Zapsat do knihy</button>
+      <button id="z-ne">Opravit</button></div>`);
+    $("z-ano").onclick = () => zapisFormular(true);
+    $("z-ne").onclick = () => { $("z-nahled").innerHTML = ""; };
+  } catch (e) { ukaz("z-nahled", "chyba", esc(e.message)); }
+}
+
+async function importVypisu(potvrdit) {
+  const soubor = $("v-soubor").files[0];
+  if (!soubor) return ukaz("v-vysledek", "chyba", "Vyberte soubor s výpisem.");
+  try {
+    const r = await posli("/api/import", { obsah: await soubor.text(), mena: $("v-mena").value, potvrdit });
+    const mapa = Object.entries(r.mapovani).map(([nas, cizi]) => `${esc(nas)} ← ${esc(cizi)}`).join(", ");
+    const nove = r.nove.map(p => `<li>${radekPohybu(p)}</li>`).join("");
+    const presk = r.preskocene.map(x => `<li>řádek ${x.radek}: ${esc(x.duvod)}</li>`).join("");
+    const prev = Object.entries(r.prevedene || {}).map(([i, t]) => `${esc(i)} → <b>${esc(t)}</b>`).join(", ");
+    const neprev = (r.neprevedene || []).map(esc).join(", ");
+    if (r.ulozeno) return ukaz("v-vysledek", "ok", `Uloženo: ${pohybu(r.nove.length)}.`);
+    ukaz("v-vysledek", "", `<div class="faint">Sloupce: ${mapa}</div>
+      ${prev ? `<div class="faint">ISIN převedené podle měny nákupu: ${prev}</div>` : ""}
+      ${neprev ? `<p class="warn">Bez tickeru (ceny se nestáhnou, doplňte do data/isin_tickery.csv): ${neprev}</p>` : ""}
+      <p>Nových ${r.nove.length}, už v knize ${r.uz_v_knize}.</p>
+      ${nove ? `<ul>${nove}</ul>` : ""}${presk ? `<p class="warn">Přeskočeno:</p><ul class="warn">${presk}</ul>` : ""}
+      ${r.nove.length ? `<div class="tlacitka"><button class="potvrdit" id="v-ano">Uložit ${pohybu(r.nove.length)}</button></div>` : ""}`);
+    if (r.nove.length) $("v-ano").onclick = () => importVypisu(true);
+  } catch (e) { ukaz("v-vysledek", "chyba", esc(e.message)); }
+}
+
+async function pripravZapis() {
+  const r = await (await fetch("/api/zapis", { cache: "no-store" })).json();
+  if (!r.povoleno) return;
+  $("zapis").hidden = false;
+  $("z-kniha").textContent = r.kniha;
+  $("z-form").elements.den.value = new Date().toISOString().slice(0, 10);
+  $("z-form").onsubmit = e => { e.preventDefault(); zapisFormular(false); };
+  $("v-nahled").onclick = () => importVypisu(false);
+}
+
+// ── přístupy ───────────────────────────────────────────────────────────
+function vykresliPristupy(seznam) {
+  $("pristupy").innerHTML = `<table class="osa" style="width:100%"><tbody>${seznam.map(p => `<tr>
+    <td style="width:40%"><b>${esc(p.nazev)}</b><br><span class="faint">${esc(p.potreba)}</span></td>
+    <td>${p.id === "sec"
+      ? `<form class="pristup" data-zdroj="sec"><input name="hodnota" placeholder="${p.vyplneno ? "vyplněno (" + esc(p.nahled) + ") — přepsat" : "Jméno Příjmení e-mail@…"}">
+         <button type="submit">Uložit</button>${p.vyplneno ? ` <button type="button" class="male" data-smazat>smazat</button>` : ""}</form>`
+      : `<span class="up">připraveno</span>`}</td></tr>`).join("")}</tbody></table><div id="p-zprava" class="faint"></div>`;
+  document.querySelectorAll("form.pristup").forEach(f => {
+    const uloz = async hodnota => {
+      try { vykresliPristupy((await posli("/api/pristupy", { zdroj: f.dataset.zdroj, hodnota })).pristupy); }
+      catch (e) { $("p-zprava").textContent = e.message; }
+    };
+    f.onsubmit = e => { e.preventDefault(); uloz(f.hodnota.value); };
+    const smaz = f.querySelector("[data-smazat]"); if (smaz) smaz.onclick = () => uloz("");
+  });
+}
+
+// ── iPhone ─────────────────────────────────────────────────────────────
+async function iphone(akce) {
+  const r = akce ? await posli("/api/iphone", { akce })
+                 : await (await fetch("/api/iphone", { cache: "no-store" })).json();
+  const el = $("iphone");
+  if (!r.zapnuto) {
+    el.innerHTML = `<div class="head" style="margin-top:18px"><h2>iPhone</h2>
+      <span class="hint">přehled i na telefonu, doma na stejné Wi-Fi</span></div>
+      <p class="dim">Vypnuto. Po zapnutí se přehled otevře do domácí sítě — ale jen pro zařízení,
+      které naskenuje QR kód z téhle obrazovky. Ostatní na Wi-Fi nic neuvidí.</p>
+      <button type="button" onclick="iphone('zapnout')">Zapnout přístup z iPhonu</button>`;
+    return;
+  }
+  el.innerHTML = `<div class="head" style="margin-top:18px"><h2>iPhone</h2>
+      <span class="hint">${r.bezi ? "zapnuto" : "klíč existuje, ale posluchač neběží"}</span></div>
+    ${r.chyba ? `<p class="down">${esc(r.chyba)}</p>` : ""}
+    <div class="parovani">
+      <div class="qr">${r.qr || ""}</div>
+      <ol>
+        <li>Na iPhonu otevřete <b>Fotoaparát</b> a namiřte ho na kód.</li>
+        <li>Klepněte na odkaz — otevře se Safari s přehledem.</li>
+        <li>V Safari: <b>Sdílet</b> → <b>Přidat na plochu</b>.</li>
+        <li>Na ploše je ikona <b>Investice</b>. Funguje doma, když je Mac zapnutý a běží přehled.</li>
+      </ol>
+    </div>
+    <p class="faint">Spojení v domácí síti není šifrované — na veřejné Wi-Fi přístup nezapínejte.
+      Adresa: <code>${esc((r.odkaz || "").replace(/klic=.*/, "klic=…"))}</code></p>
+    <div class="tlacitka"><button type="button" onclick="iphone('vymenit')">Vyměnit klíč</button>
+      <button type="button" onclick="iphone('vypnout')">Vypnout přístup</button></div>
+    <p class="faint">Vyměnit klíč: telefon, který jste ztratil nebo komu jste ho půjčil, tím přestane mít přístup.</p>`;
+}
+
+let papirZobrazit = false;
+
+(async () => {
+  $("dnes").textContent = new Date().toLocaleDateString("cs-CZ");
+  try {
+    const n = await (await fetch("/api/nastaveni", { cache: "no-store" })).json();
+    papirZobrazit = !!n.papirovy_ucet;
+    vykresliPristupy(n.pristupy || []);
+    if (n.mistni === false) $("pristupy-oddil").hidden = true;
+    else iphone().catch(() => {});
+  } catch (e) { /* bez nastavení: jen skutečné portfolio */ }
+  if (papirZobrazit) {
+    $("papir").hidden = false;
+    try { await nacti(); }
+    catch (e) { $("chyba").innerHTML = `<div class="warnings"><div class="error">${esc(e.message)}</div></div>`; }
+  }
+  stav("aktuální", false);
+  // Portfolio zvlášť a bez await v řadě: kniha může chtít kurzy ze sítě
+  // a papírový účet na to nemá čekat.
+  nactiPortfolio().catch(() => { $("portfolio").hidden = true; });
+  nactiGrafPortfolia().catch(() => {});
+  pripravZapis().catch(() => {});
+  $("s-form").onsubmit = e => { e.preventDefault(); hledat(e.target.symbol.value.trim()); };
+  nactiTrh().catch(() => { $("trh").hidden = true; });
+  setInterval(() => nactiTrh().catch(() => {}), 600_000);
+  setInterval(hlidej, 1500);
+  addEventListener("resize", () => { if (data) graf(data.krivka); });
+})();
+</script>
+</body>
+</html>
