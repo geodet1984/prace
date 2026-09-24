@@ -931,6 +931,8 @@ async function posli(cesta, telo) {
   if (!res.ok) throw new Error(json.chyba || res.statusText);
   return json;
 }
+// Čeština: 1 pohyb, 2–4 pohyby, 5 a víc pohybů.
+const pohybu = n => `${n} ${n === 1 ? "pohyb" : n >= 2 && n <= 4 ? "pohyby" : "pohybů"}`;
 const ukaz = (id, trida, html) => { $(id).innerHTML = `<div class="nahled ${trida}">${html}</div>`; };
 const radekPohybu = p => `${esc(p.den)} · <b>${esc(p.typ)}</b> ${esc(p.symbol)}
   ${p.pocet ? `· ${dec(p.pocet, 3)} ks à ${dec(p.cena)}` : ""} · ${dec(p.castka)} ${esc(p.mena)}
@@ -964,13 +966,13 @@ async function importVypisu(potvrdit) {
     const presk = r.preskocene.map(x => `<li>řádek ${x.radek}: ${esc(x.duvod)}</li>`).join("");
     const prev = Object.entries(r.prevedene || {}).map(([i, t]) => `${esc(i)} → <b>${esc(t)}</b>`).join(", ");
     const neprev = (r.neprevedene || []).map(esc).join(", ");
-    if (r.ulozeno) return ukaz("v-vysledek", "ok", `Uloženo ${r.nove.length} pohybů.`);
+    if (r.ulozeno) return ukaz("v-vysledek", "ok", `Uloženo: ${pohybu(r.nove.length)}.`);
     ukaz("v-vysledek", "", `<div class="faint">Sloupce: ${mapa}</div>
       ${prev ? `<div class="faint">ISIN převedené podle měny nákupu: ${prev}</div>` : ""}
       ${neprev ? `<p class="warn">Bez tickeru (ceny se nestáhnou, doplňte do data/isin_tickery.csv): ${neprev}</p>` : ""}
       <p>Nových ${r.nove.length}, už v knize ${r.uz_v_knize}.</p>
       ${nove ? `<ul>${nove}</ul>` : ""}${presk ? `<p class="warn">Přeskočeno:</p><ul class="warn">${presk}</ul>` : ""}
-      ${r.nove.length ? `<div class="tlacitka"><button class="potvrdit" id="v-ano">Uložit ${r.nove.length} pohybů</button></div>` : ""}`);
+      ${r.nove.length ? `<div class="tlacitka"><button class="potvrdit" id="v-ano">Uložit ${pohybu(r.nove.length)}</button></div>` : ""}`);
     if (r.nove.length) $("v-ano").onclick = () => importVypisu(true);
   } catch (e) { ukaz("v-vysledek", "chyba", esc(e.message)); }
 }
