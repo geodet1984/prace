@@ -343,6 +343,32 @@ button.potvrdit { background: var(--modra); color: #04122a; border-color: var(--
 .dot { background: var(--zelen-ink); }
 .investori { margin-top: 10px; }
 button.male { font-size: 12px; padding: 1px 8px; margin-left: 10px; vertical-align: middle; }
+/* ── jednotná výška polí ──────────────────────────────────────────────
+   Textové pole, výběr, datum i soubor mají od systému každý jinou výšku
+   a vnitřní odsazení, takže řádky formuláře „skákaly". Všem se proto
+   nastaví stejná výška a odsazení a výběru vlastní šipka; tlačítka se
+   zarovnají na spodní linku řádku. */
+.formular { align-items: end; }
+.formular input, .formular select {
+  height: 40px; line-height: 40px; padding: 0 2px; margin: 0;
+  font-size: 16px; box-sizing: border-box; width: 100%;
+  -webkit-appearance: none; appearance: none;
+}
+.formular select {
+  padding-right: 22px; cursor: pointer;
+  background: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="12" height="8"><path d="M1 1l5 5 5-5" fill="none" stroke="%233d9bff" stroke-width="2"/></svg>') no-repeat right 4px center;
+}
+.formular select option { background: #0b1a33; color: #e8f1ff; }
+.formular input[type="date"]::-webkit-datetime-edit { padding: 0; line-height: 40px; }
+.formular input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(.8) sepia(1) hue-rotate(180deg) saturate(4); cursor: pointer; }
+.formular input[type="file"] { line-height: normal; padding-top: 7px; border-bottom: 1px solid var(--linka); }
+.formular input[type="file"]::file-selector-button {
+  font: inherit; font-size: 14px; font-variant: small-caps; letter-spacing: .06em;
+  color: var(--ink); background: var(--papir-tmavy); border: 1px solid var(--modra);
+  padding: 3px 12px; margin-right: 10px; cursor: pointer; }
+.formular .tlacitka { height: 40px; align-items: center; }
+.formular .tlacitka button, .formular > .tlacitka button { height: 36px; padding: 0 16px; }
+.formular label { gap: 4px; }
 </style>
 </head>
 <body>
