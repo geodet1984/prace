@@ -38,6 +38,11 @@ for s in 16 32 128 256 512; do
 done
 iconutil -c icns "$TMP/Ikona.iconset" -o "$TMP/Ikona.icns"
 
+# Ikona pro plochu iPhonu (webová aplikace z přehledu).
+"$TMP/ikona" "$TMP/ikona-ios.png" --ios
+sips -z 180 180 "$TMP/ikona-ios.png" --out trading/ui/ikona-180.png >/dev/null
+sips -z 512 512 "$TMP/ikona-ios.png" --out trading/ui/ikona-512.png >/dev/null
+
 echo "Překládám aplikaci…"
 mkdir -p "$TMP/app/Contents/MacOS" "$TMP/app/Contents/Resources"
 "$SWIFTC" "${SWIFT_FLAGS[@]}" macos/MojeInvestice.swift -o "$TMP/app/Contents/MacOS/MojeInvestice"

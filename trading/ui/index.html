@@ -2,8 +2,16 @@
 <html lang="cs">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Moje investice</title>
+<!-- Přidání na plochu iPhonu: ikona, celá obrazovka, tmavý stavový řádek. -->
+<link rel="manifest" href="/manifest.json">
+<link rel="apple-touch-icon" href="/ikona-180.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Investice">
+<meta name="theme-color" content="#0b1a33">
 <style>
 /*
   Jeden soubor, žádné závislosti. Dashboard běží na loopbacku ze standardní
@@ -369,6 +377,23 @@ button.male { font-size: 12px; padding: 1px 8px; margin-left: 10px; vertical-ali
 .formular .tlacitka { height: 40px; align-items: center; }
 .formular .tlacitka button, .formular > .tlacitka button { height: 36px; padding: 0 16px; }
 .formular label { gap: 4px; }
+/* ── párování iPhonu ───────────────────────────────────────────────── */
+.parovani { display: flex; gap: 26px; align-items: center; margin: 12px 0; flex-wrap: wrap; }
+.parovani .qr svg { width: 220px; height: 220px; display: block; border-radius: 10px; }
+.parovani ol { margin: 0; padding-left: 20px; line-height: 1.9; max-width: 460px; }
+
+/* ── telefon ───────────────────────────────────────────────────────── */
+@media (max-width: 600px) {
+  .wrap { padding: calc(14px + env(safe-area-inset-top)) 14px 40px; }
+  h1 { font-size: 30px; }
+  .datumovka { font-size: 10px; letter-spacing: .08em; }
+  .datumovka span:first-child { display: none; }
+  .formular { grid-template-columns: 1fr 1fr; gap: 8px 12px; }
+  .formular .siroke { grid-column: span 2; }
+  .head { flex-wrap: wrap; }
+  .head .hint { text-align: left; }
+  .titul h3 { font-size: 17px; }
+}
 </style>
 </head>
 <body>
@@ -531,6 +556,7 @@ button.male { font-size: 12px; padding: 1px 8px; margin-left: 10px; vertical-ali
       <div class="head"><h2>Přístupy k datům</h2>
         <span class="hint">vyplníte, až budete chtít · uloženo jen na tomhle Macu, mimo git</span></div>
       <div id="pristupy"></div>
+      <div id="iphone" class="iphone"></div>
     </section>
   </div>
 
@@ -1031,6 +1057,38 @@ function vykresliPristupy(seznam) {
   });
 }
 
+// ── iPhone ─────────────────────────────────────────────────────────────
+async function iphone(akce) {
+  const r = akce ? await posli("/api/iphone", { akce })
+                 : await (await fetch("/api/iphone", { cache: "no-store" })).json();
+  const el = $("iphone");
+  if (!r.zapnuto) {
+    el.innerHTML = `<div class="head" style="margin-top:18px"><h2>iPhone</h2>
+      <span class="hint">přehled i na telefonu, doma na stejné Wi-Fi</span></div>
+      <p class="dim">Vypnuto. Po zapnutí se přehled otevře do domácí sítě — ale jen pro zařízení,
+      které naskenuje QR kód z téhle obrazovky. Ostatní na Wi-Fi nic neuvidí.</p>
+      <button type="button" onclick="iphone('zapnout')">Zapnout přístup z iPhonu</button>`;
+    return;
+  }
+  el.innerHTML = `<div class="head" style="margin-top:18px"><h2>iPhone</h2>
+      <span class="hint">${r.bezi ? "zapnuto" : "klíč existuje, ale posluchač neběží"}</span></div>
+    ${r.chyba ? `<p class="down">${esc(r.chyba)}</p>` : ""}
+    <div class="parovani">
+      <div class="qr">${r.qr || ""}</div>
+      <ol>
+        <li>Na iPhonu otevřete <b>Fotoaparát</b> a namiřte ho na kód.</li>
+        <li>Klepněte na odkaz — otevře se Safari s přehledem.</li>
+        <li>V Safari: <b>Sdílet</b> → <b>Přidat na plochu</b>.</li>
+        <li>Na ploše je ikona <b>Investice</b>. Funguje doma, když je Mac zapnutý a běží přehled.</li>
+      </ol>
+    </div>
+    <p class="faint">Spojení v domácí síti není šifrované — na veřejné Wi-Fi přístup nezapínejte.
+      Adresa: <code>${esc((r.odkaz || "").replace(/klic=.*/, "klic=…"))}</code></p>
+    <div class="tlacitka"><button type="button" onclick="iphone('vymenit')">Vyměnit klíč</button>
+      <button type="button" onclick="iphone('vypnout')">Vypnout přístup</button></div>
+    <p class="faint">Vyměnit klíč: telefon, který jste ztratil nebo komu jste ho půjčil, tím přestane mít přístup.</p>`;
+}
+
 let papirZobrazit = false;
 
 (async () => {
@@ -1039,6 +1097,8 @@ let papirZobrazit = false;
     const n = await (await fetch("/api/nastaveni", { cache: "no-store" })).json();
     papirZobrazit = !!n.papirovy_ucet;
     vykresliPristupy(n.pristupy || []);
+    if (n.mistni === false) $("pristupy-oddil").hidden = true;
+    else iphone().catch(() => {});
   } catch (e) { /* bez nastavení: jen skutečné portfolio */ }
   if (papirZobrazit) {
     $("papir").hidden = false;

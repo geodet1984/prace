@@ -8,13 +8,18 @@ let obrazek = NSImage(size: NSSize(width: velikost, height: velikost))
 obrazek.lockFocus()
 let ctx = NSGraphicsContext.current!.cgContext
 
-// Zaoblený čtverec podle mřížky macOS ikon (okraj 100 px, poloměr ~185).
-let plocha = NSRect(x: 100, y: 100, width: 824, height: 824)
-let tvar = NSBezierPath(roundedRect: plocha, xRadius: 185, yRadius: 185)
+// macOS: zaoblený čtverec s okrajem podle mřížky systémových ikon.
+// iOS (--ios): přes celou plochu bez zaoblení — rohy si iPhone ořízne sám
+// a ikona s vlastním okrajem by na ploše vypadala menší než ostatní.
+let ios = CommandLine.arguments.contains("--ios")
+let plocha = ios ? NSRect(x: 0, y: 0, width: 1024, height: 1024)
+                 : NSRect(x: 100, y: 100, width: 824, height: 824)
+let tvar = ios ? NSBezierPath(rect: plocha)
+               : NSBezierPath(roundedRect: plocha, xRadius: 185, yRadius: 185)
 
 ctx.saveGState()
 let stin = NSShadow()
-stin.shadowColor = NSColor.black.withAlphaComponent(0.45)
+stin.shadowColor = NSColor.black.withAlphaComponent(ios ? 0 : 0.45)
 stin.shadowBlurRadius = 30
 stin.shadowOffset = NSSize(width: 0, height: -14)
 stin.set()

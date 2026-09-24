@@ -35,6 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import fx as fx_module
+from . import iphone as iphone_module
 from . import ledger as ledger_module
 from . import pozice_investoru as pozice_module
 from . import stav_trhu as stav_trhu_module
@@ -599,11 +600,16 @@ class _Handler(BaseHTTPRequestHandler):
     server_version = "TraderDashboard"
 
     def __init__(self, *args, state_path: Path, ledger_path: Path | None = None,
-                 papirovy_ucet: bool = False, sledovane: Path = SLEDOVANE, **kwargs) -> None:
+                 papirovy_ucet: bool = False, sledovane: Path = SLEDOVANE,
+                 sit: iphone_module.Sit | None = None,
+                 klic_soubor: Path = iphone_module.KLIC, **kwargs) -> None:
         self.state_path = state_path
         self.ledger_path = ledger_path
         self.papirovy_ucet = papirovy_ucet
         self.sledovane = sledovane
+        self.sit = sit
+        self.klic_soubor = klic_soubor
+        self._nastavit_cookie: str | None = None
         super().__init__(*args, **kwargs)
 
     # Výchozí handler loguje každý request na stderr, což u stránky, která
@@ -611,8 +617,60 @@ class _Handler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args) -> None:  # noqa: A002 - podpis stdlib
         logger.debug("%s %s", self.address_string(), format % args)
 
+    # --- přístup odjinud než z tohohle Macu --------------------------------
+
+    @property
+    def mistni(self) -> bool:
+        return iphone_module.je_mistni(self.client_address[0])
+
+    def _klic_z_pozadavku(self) -> str | None:
+        from http.cookies import SimpleCookie
+        from urllib.parse import parse_qs, urlsplit
+
+        z_adresy = parse_qs(urlsplit(self.path).query).get("klic", [None])[0]
+        if z_adresy:
+            return z_adresy
+        cookie = SimpleCookie(self.headers.get("Cookie") or "")
+        return cookie[iphone_module.COOKIE].value if iphone_module.COOKIE in cookie else None
+
+    def _povolen(self) -> bool:
+        """Z Macu vždy; odjinud jen s platným klíčem. Jinak 401 a nic víc."""
+        if self.mistni:
+            return True
+        klic = self._klic_z_pozadavku()
+        if iphone_module.over(klic, self.klic_soubor):
+            # Klíč z odkazu uložit do cookie, ať ho další požadavky stránky nesou.
+            self._nastavit_cookie = klic
+            return True
+        telo = ("<!doctype html><meta charset=utf-8><meta name=viewport "
+                "content='width=device-width'><body style='background:#0b1a33;color:#e8f1ff;"
+                "font:17px -apple-system;padding:40px'><h2>Moje investice</h2><p>Tohle zařízení "
+                "není spárované. Na Macu v přehledu otevřete <b>Přístupy → iPhone</b> "
+                "a naskenujte QR kód.</p>").encode()
+        self.send_response(401)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(telo)))
+        self.end_headers()
+        self.wfile.write(telo)
+        return False
+
     def do_GET(self) -> None:  # noqa: N802 - podpis stdlib
+        if not self._povolen():
+            return
         route = self.path.split("?")[0]
+        if route == "/manifest.json":
+            self._send_manifest()
+            return
+        if route in ("/ikona-180.png", "/ikona-512.png"):
+            cesta = UI_DIR / route.lstrip("/")
+            if cesta.exists():
+                self._send_bytes(cesta.read_bytes(), "image/png")
+            else:
+                self._send_json({"chyba": "ikona chybí"}, status=404)
+            return
+        if route == "/api/iphone":
+            self._send_iphone()
+            return
         if route == "/":
             self._send_html()
         elif route == "/api/prehled":
@@ -624,7 +682,9 @@ class _Handler(BaseHTTPRequestHandler):
         elif route == "/api/nastaveni":
             self._send_json({"papirovy_ucet": self.papirovy_ucet,
                              "kniha": self.ledger_path is not None,
-                             "pristupy": stav_pristupu()})
+                             "mistni": self.mistni,
+                             # Na iPhonu se přístupy neukazují — nastavují se jen na Macu.
+                             "pristupy": stav_pristupu() if self.mistni else []})
         elif route == "/api/sledovane":
             self._send_json({"tituly": nacti_sledovane(self.sledovane)})
         elif route == "/api/zapis":
@@ -679,6 +739,31 @@ class _Handler(BaseHTTPRequestHandler):
             payload = {"vedena": False, "duvod": f"knihu nelze zpracovat: {exc}"}
         self._send_json(payload)
 
+    def _send_manifest(self) -> None:
+        """Aby šla stránka přidat na plochu iPhonu jako aplikace.
+
+        Start s klíčem v adrese: iOS dává aplikacím z plochy vlastní úložiště
+        cookies, takže by jinak po přidání na plochu klíč ztratila.
+        """
+        klic = self._klic_z_pozadavku() if not self.mistni else None
+        self._send_json({
+            "name": "Moje investice", "short_name": "Investice",
+            "start_url": f"/?klic={klic}" if klic else "/",
+            "display": "standalone", "background_color": "#0b1a33", "theme_color": "#0b1a33",
+            "icons": [{"src": "/ikona-180.png", "sizes": "180x180", "type": "image/png"},
+                      {"src": "/ikona-512.png", "sizes": "512x512", "type": "image/png"}],
+        })
+
+    def _send_iphone(self) -> None:
+        """Stav přístupu z iPhonu; QR a odkaz jen na Macu."""
+        klic = iphone_module.nacti_klic(self.klic_soubor)
+        stav = {"zapnuto": bool(klic), "bezi": bool(self.sit and self.sit.bezi),
+                "chyba": self.sit.chyba if self.sit else None}
+        if klic and self.mistni:
+            odkaz = iphone_module.odkaz_parovani(klic)
+            stav.update({"odkaz": odkaz, "qr": iphone_module.qr_svg(odkaz)})
+        self._send_json(stav)
+
     def _send_trh(self) -> None:
         """Stav trhu u držených a sledovaných titulů. Chyba = prázdný oddíl."""
         try:
@@ -699,6 +784,11 @@ class _Handler(BaseHTTPRequestHandler):
         # Bez tohohle by prohlížeč servíroval starou verzi a editace šablony
         # by vypadala, že nic nedělá.
         self.send_header("Cache-Control", "no-store")
+        if self._nastavit_cookie:
+            self.send_header(
+                "Set-Cookie",
+                f"{iphone_module.COOKIE}={self._nastavit_cookie}; Path=/; Max-Age=31536000; "
+                "HttpOnly; SameSite=Strict")
         self.end_headers()
         self.wfile.write(body)
 
@@ -721,13 +811,36 @@ class _Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:  # noqa: N802 - podpis stdlib
         """Jediná zapisující cesta: účetní kniha, a jen z naší stránky."""
+        if not self._povolen():
+            return
         route = self.path.split("?")[0]
-        if route not in ("/api/zapis", "/api/import", "/api/sledovane", "/api/pristupy"):
+        if route not in ("/api/zapis", "/api/import", "/api/sledovane", "/api/pristupy",
+                         "/api/iphone"):
             self._reject()
             return
         duvod = self._proc_odmitnout_zapis()
         if duvod:
             self._send_json({"chyba": duvod}, status=403)
+            return
+        if route in ("/api/pristupy", "/api/iphone") and not self.mistni:
+            # Přístupy a párování jen z Macu: spárovaný iPhone si nesmí
+            # vystavit nový klíč ani zapnout přístup pro další zařízení.
+            self._send_json({"chyba": "tohle jde nastavit jen na Macu"}, status=403)
+            return
+        if route == "/api/iphone":
+            delka = min(int(self.headers.get("Content-Length") or 0), 10_000)
+            data = json.loads(self.rfile.read(delka) or b"{}")
+            akce = data.get("akce")
+            if akce in ("zapnout", "vymenit"):
+                if akce == "vymenit" or not iphone_module.nacti_klic(self.klic_soubor):
+                    iphone_module.novy_klic(self.klic_soubor)
+                if self.sit:
+                    self.sit.zapnout()
+            elif akce == "vypnout":
+                iphone_module.vypnout(self.klic_soubor)
+                if self.sit:
+                    self.sit.vypnout()
+            self._send_iphone()
             return
         if route == "/api/pristupy":
             try:
@@ -784,6 +897,14 @@ class _Handler(BaseHTTPRequestHandler):
         """
         if self.headers.get(self.ZAPIS_HLAVICKA) != "1":
             return "chybí hlavička stránky — zapisovat jde jen z přehledu"
+        if not self.mistni:
+            # Z iPhonu je původem adresa Macu. Klíč už ověřil _povolen();
+            # tady jen, že stránka, která zápis posílá, je ta naše.
+            host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
+            origin = self.headers.get("Origin")
+            if origin and origin.split("://", 1)[-1].rsplit(":", 1)[0] != host:
+                return f"zápis z cizí stránky ({origin}) odmítnut"
+            return None
         mistni = ("localhost", "127.0.0.1", "[::1]")
         host = (self.headers.get("Host") or "").rsplit(":", 1)[0]
         if host not in mistni:
@@ -802,17 +923,34 @@ def make_server(
     port: int = 8765,
     ledger_path: str | Path | None = None,
     papirovy_ucet: bool = False,
-    sledovane: str | Path = SLEDOVANE,
+    sledovane: str | Path | None = None,
+    klic_soubor: Path | None = None,
+    sit_zapnout: bool = True,
 ):
-    """Sestaví server. Nespouští ho — kvůli testům."""
+    """Sestaví server. Nespouští ho — kvůli testům.
+
+    Byl-li přístup z iPhonu zapnutý (existuje klíč), otevře se znovu
+    i posluchač do domácí sítě — po restartu Macu to tak funguje dál.
+    """
+    # Až teď, ne ve výchozí hodnotě parametru — testy tak klíč podstrčí.
+    klic_soubor = klic_soubor or iphone_module.KLIC
+    sledovane = sledovane or SLEDOVANE
+    sit = iphone_module.Sit(None)
     handler = partial(
         _Handler,
         state_path=Path(state_path),
         ledger_path=Path(ledger_path) if ledger_path else None,
         papirovy_ucet=papirovy_ucet,
         sledovane=Path(sledovane),
+        sit=sit,
+        klic_soubor=klic_soubor,
     )
-    return ThreadingHTTPServer((host, port), handler)
+    sit.handler = handler
+    httpd = ThreadingHTTPServer((host, port), handler)
+    httpd.sit = sit
+    if sit_zapnout and iphone_module.nacti_klic(klic_soubor):
+        sit.zapnout()
+    return httpd
 
 
 def serve(
@@ -840,5 +978,6 @@ def serve(
     except KeyboardInterrupt:
         print("\nPřehled ukončen.")
     finally:
+        httpd.sit.vypnout()
         httpd.server_close()
     return 0

@@ -28,3 +28,6 @@ data/sledovane.txt
 data/sec_kontakt.txt
 # Převodní tabulka ISIN → ticker prozradí, co držíte.
 data/isin_tickery.csv
+# Klíč pro přístup z iPhonu — kdo ho má, vidí portfolio.
+data/iphone_klic.txt
+data/iphone_klic.tmp
