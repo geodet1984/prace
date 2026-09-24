@@ -38,6 +38,7 @@ from . import fx as fx_module
 from . import iphone as iphone_module
 from . import ledger as ledger_module
 from . import pozice_investoru as pozice_module
+from . import pse as pse_module
 from . import stav_trhu as stav_trhu_module
 from . import zapis_web as zapis_module
 
@@ -301,6 +302,11 @@ def _ceny_pozic(symbols: list[str]) -> dict[str, float]:
 
     ceny: dict[str, float] = {}
     for symbol in symbols:
+        # České tituly oficiálním kurzem z burzy, ostatní z Yahoo.
+        oficialni = pse_module.oficialni_kurz(symbol)
+        if oficialni:
+            ceny[symbol] = oficialni.zaverecny
+            continue
         try:
             df = data_module.fetch(symbol)
             ceny[symbol] = float(df["close"].iloc[-1])
@@ -587,6 +593,10 @@ def trh_payload(tituly: list[str], kalendar: Path = Path("data/udalosti.csv")) -
             df = stav_trhu_module.nacti(symbol)
             r = stav_trhu_module.rozbor(symbol, df, udalosti)
             r["investori"] = pozice_module.rozbor(symbol, df)
+            oficialni = pse_module.oficialni_kurz(symbol)
+            if oficialni:
+                # Oficiální kurz nahoru: je přímo od burzy a nese objem obchodů.
+                r["vety"].insert(0, pse_module.veta(oficialni))
             rozbory.append(r)
         except Exception as exc:  # noqa: BLE001 - jeden titul nesmí shodit ostatní
             chyby.append({"symbol": symbol, "chyba": str(exc)})
