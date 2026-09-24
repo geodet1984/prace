@@ -17,14 +17,12 @@ data/*.tmp
 # Kalendář událostí je ručně opsaný ze zdrojů, žádný build ho neobnoví —
 # na rozdíl od cache s tržními daty do repozitáře patří.
 !data/udalosti.csv
-!data/udalosti-vzor.csv
-# Vzor účetní knihy patří do repozitáře; data/portfolio.csv se skutečnými
-# obchody schválně ne — vaše pozice nejsou nikoho jiného věc.
-!data/portfolio-vzor.csv
+# data/portfolio.csv se skutečnými obchody do repozitáře nepatří —
+# vaše pozice nejsou nikoho jiného věc (*.csv výše ji už vylučuje).
 # Totéž pro paměť hlídače a jeho log: je z nich vidět, co držíte a kdy.
 data/hlidac_stav.json
 data/hlidac*.log
-# Seznam sledovaných titulů je osobní; do gitu jde jen vzor.
+# Seznam sledovaných titulů je osobní.
 data/sledovane.txt
 # Kontakt pro SEC (jméno a e-mail) — osobní údaj.
 data/sec_kontakt.txt

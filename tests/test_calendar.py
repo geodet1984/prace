@@ -170,10 +170,6 @@ def _data_dir():
     return Path(__file__).resolve().parent.parent / "data"
 
 
-def test_shipped_sample_calendar_parses():
-    assert len(EventCalendar.from_csv(_data_dir() / "udalosti-vzor.csv")) >= 1
-
-
 def test_real_calendar_parses():
     assert len(EventCalendar.from_csv(_data_dir() / "udalosti.csv")) >= 20
 

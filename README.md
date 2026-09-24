@@ -278,8 +278,8 @@ python -m trading backtest --symbols SPY,QQQ --start 2015-01-01 \
 ```
 
 Kalendář je prosté CSV se sloupci `date,name,symbol` (prázdný symbol = makro
-událost pro všechny tituly). Vzor včetně odkazů na oficiální zdroje termínů
-je v `data/udalosti-vzor.csv`.
+událost pro všechny tituly). Skutečné termíny včetně odkazů na oficiální
+zdroje jsou v `data/udalosti.csv`.
 
 Použít v backtestu skutečné historické termíny **není** pohled do budoucnosti:
 Fed publikuje data zasedání rok dopředu, takže v den obchodu ta informace
