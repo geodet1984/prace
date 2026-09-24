@@ -61,16 +61,29 @@ def pohyb_z_formulare(data: dict) -> Transaction:
     if den > date.today():
         raise LedgerError(f"datum {den} je v budoucnosti")
 
+    symbol = (data.get("symbol") or "").strip().upper() or None
+    mena = (data.get("mena") or "CZK").strip().upper()
+    poznamka = (data.get("poznamka") or "").strip()
+    if symbol:
+        from . import isin as isin_module
+
+        if isin_module.je_isin(symbol):
+            ticker = isin_module.preloz(symbol, mena)
+            if not ticker:
+                raise LedgerError(f"k ISIN {symbol} se nenašel ticker kotovaný v {mena}; "
+                                  "zadejte ticker přímo, např. CSPX.AS")
+            poznamka = f"ISIN {symbol}" + (f"; {poznamka}" if poznamka else "")
+            symbol = ticker
     return Transaction(
         day=den,
         type=druh,
         amount=vypis_module.castka(druh, vypis_module.cislo(data.get("castka")), pocet, cena),
-        symbol=(data.get("symbol") or "").strip().upper() or None,
+        symbol=symbol,
         quantity=pocet,
         price=cena,
         fee=vypis_module.cislo(data.get("poplatek")),
-        currency=(data.get("mena") or "CZK").strip().upper(),
-        note=(data.get("poznamka") or "").strip(),
+        currency=mena,
+        note=poznamka,
     )
 
 
@@ -112,6 +125,8 @@ def import_vypisu(cesta: Path, obsah: str, *, potvrdit: bool, mena: str = "CZK",
             "nove": [_popis(t) for t in nove],
             "uz_v_knize": len(vysledek.pohyby) - len(nove),
             "preskocene": [{"radek": r, "duvod": d} for r, d in vysledek.preskocene],
+            "prevedene": vysledek.prevedene,
+            "neprevedene": vysledek.neprevedene,
             "ulozeno": False,
         }
         if potvrdit and nove:

@@ -26,3 +26,5 @@ data/hlidac*.log
 data/sledovane.txt
 # Kontakt pro SEC (jméno a e-mail) — osobní údaj.
 data/sec_kontakt.txt
+# Převodní tabulka ISIN → ticker prozradí, co držíte.
+data/isin_tickery.csv

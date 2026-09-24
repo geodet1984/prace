@@ -23,6 +23,7 @@ from . import data as data_module
 from . import ensemble as ensemble_module
 from . import fx as fx_module
 from . import hlidac as hlidac_module
+from . import isin as isin_module
 from . import ledger as ledger_module
 from . import pozice_investoru as pozice_module
 from . import stats as stats_module
@@ -592,6 +593,15 @@ def cmd_zapis(args) -> int:
     kniha = _nacti_knihu(cesta, zalozit=True)
 
     druh = ledger_module.TxType(args.typ)
+    poznamka = args.poznamka or ""
+    if args.symbol and isin_module.je_isin(args.symbol):
+        ticker = isin_module.preloz(args.symbol, args.mena)
+        if not ticker:
+            raise SystemExit(f"k ISIN {args.symbol} se nenašel ticker kotovaný v {args.mena}; "
+                             "zadejte ticker přímo, nebo ho doplňte do data/isin_tickery.csv")
+        print(f"ISIN {args.symbol} → {ticker}")
+        poznamka = f"ISIN {args.symbol}" + (f"; {poznamka}" if poznamka else "")
+        args.symbol = ticker
     pohyb = ledger_module.Transaction(
         day=vypis_module.datum(args.den) if args.den else date.today(),
         type=druh,
@@ -601,7 +611,7 @@ def cmd_zapis(args) -> int:
         price=args.cena,
         fee=args.poplatek,
         currency=args.mena,
-        note=args.poznamka or "",
+        note=poznamka,
     )
 
     if not kniha.add(pohyb):
@@ -639,6 +649,14 @@ def cmd_import(args) -> int:
         print(f"    {nas:<10} {cizi if cizi else '— není, nechá se prázdné'}")
 
     print(f"\n  Přečteno {len(vysledek.pohyby)} pohybů: {pridano} nových, {preskoceno} už v knize.")
+    if vysledek.prevedene:
+        print("\n  ISIN převedené na ticker (podle měny nákupu):")
+        for isin_, ticker in vysledek.prevedene.items():
+            print(f"    {isin_} → {ticker}")
+    if vysledek.neprevedene:
+        print("  ISIN bez tickeru — ceny se nestáhnou, doplňte je do data/isin_tickery.csv:")
+        for isin_ in vysledek.neprevedene:
+            print(f"    {isin_}")
     if vysledek.preskocene:
         print(f"  Nepřečteno {len(vysledek.preskocene)} řádků:")
         for cislo_radku, duvod in vysledek.preskocene[:10]:

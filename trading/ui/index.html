@@ -455,7 +455,7 @@ button.male { font-size: 12px; padding: 1px 8px; margin-left: 10px; vertical-ali
             <option value="dan">daň</option><option value="smena">směna měny</option>
           </select></label>
         <label>Datum <input type="date" name="den"></label>
-        <label>Titul <input name="symbol" placeholder="CSPX.AS" list="z-tituly"></label>
+        <label>Titul <input name="symbol" placeholder="CSPX.AS nebo ISIN" list="z-tituly"></label>
         <label>Kusů <input name="pocet" inputmode="decimal" placeholder="2"></label>
         <label>Cena za kus <input name="cena" inputmode="decimal" placeholder="521,40"></label>
         <label>Poplatek <input name="poplatek" inputmode="decimal" placeholder="4"></label>
@@ -962,8 +962,12 @@ async function importVypisu(potvrdit) {
     const mapa = Object.entries(r.mapovani).map(([nas, cizi]) => `${esc(nas)} ← ${esc(cizi)}`).join(", ");
     const nove = r.nove.map(p => `<li>${radekPohybu(p)}</li>`).join("");
     const presk = r.preskocene.map(x => `<li>řádek ${x.radek}: ${esc(x.duvod)}</li>`).join("");
+    const prev = Object.entries(r.prevedene || {}).map(([i, t]) => `${esc(i)} → <b>${esc(t)}</b>`).join(", ");
+    const neprev = (r.neprevedene || []).map(esc).join(", ");
     if (r.ulozeno) return ukaz("v-vysledek", "ok", `Uloženo ${r.nove.length} pohybů.`);
     ukaz("v-vysledek", "", `<div class="faint">Sloupce: ${mapa}</div>
+      ${prev ? `<div class="faint">ISIN převedené podle měny nákupu: ${prev}</div>` : ""}
+      ${neprev ? `<p class="warn">Bez tickeru (ceny se nestáhnou, doplňte do data/isin_tickery.csv): ${neprev}</p>` : ""}
       <p>Nových ${r.nove.length}, už v knize ${r.uz_v_knize}.</p>
       ${nove ? `<ul>${nove}</ul>` : ""}${presk ? `<p class="warn">Přeskočeno:</p><ul class="warn">${presk}</ul>` : ""}
       ${r.nove.length ? `<div class="tlacitka"><button class="potvrdit" id="v-ano">Uložit ${r.nove.length} pohybů</button></div>` : ""}`);

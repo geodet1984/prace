@@ -33,7 +33,7 @@ from __future__ import annotations
 import csv
 import logging
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date, datetime
 from pathlib import Path
 
@@ -157,6 +157,12 @@ class Vysledek:
 
     preskocene: list[tuple[int, str]] = field(default_factory=list)
     """Řádky, ze kterých nešel udělat zápis: číslo řádku a důvod."""
+
+    prevedene: dict[str, str] = field(default_factory=dict)
+    """ISIN → ticker, jak se převedly. Patří do náhledu jako mapování sloupců."""
+
+    neprevedene: list[str] = field(default_factory=list)
+    """ISIN, ke kterým se ticker se správnou měnou nenašel."""
 
 
 def _bez_diakritiky(text: str) -> str:
@@ -314,6 +320,7 @@ def nacti_vypis(
     *,
     vychozi_mena: str = "USD",
     datum_format: str | None = None,
+    prekladac=None,
 ) -> Vysledek:
     """Přečte cizí CSV a udělá z něj pohyby. Do knihy nic nezapisuje.
 
@@ -360,7 +367,31 @@ def nacti_vypis(
             # (převod mezi vlastními účty). Vypsat ho ale musíme — jinak
             # bude v knize chybět a nikdo nepozná co.
             vysledek.preskocene.append((cislo_radku, str(exc)))
+    prevest_isin(vysledek, prekladac)
     return vysledek
+
+
+def prevest_isin(vysledek: Vysledek, prekladac=None) -> None:
+    """Nahradí ISIN tickerem, podle kterého jdou stáhnout ceny.
+
+    Původní ISIN zůstane v poznámce, ať jde pohyb dohledat ve výpisu banky.
+    Co se převést nepodaří, zůstane jako ISIN a přizná se — pozice se pak
+    ocení nákupní cenou, což přehled taky řekne.
+    """
+    from . import isin as isin_module
+
+    prekladac = prekladac or isin_module.preloz
+    for i, tx in enumerate(vysledek.pohyby):
+        if not tx.symbol or not isin_module.je_isin(tx.symbol):
+            continue
+        ticker = prekladac(tx.symbol, tx.currency)
+        if not ticker:
+            if tx.symbol not in vysledek.neprevedene:
+                vysledek.neprevedene.append(tx.symbol)
+            continue
+        vysledek.prevedene[tx.symbol] = ticker
+        poznamka = f"ISIN {tx.symbol}" + (f"; {tx.note}" if tx.note else "")
+        vysledek.pohyby[i] = replace(tx, symbol=ticker, note=poznamka)
 
 
 def _radek_na_pohyb(
