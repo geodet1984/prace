@@ -24,3 +24,5 @@ data/*.tmp
 # Totéž pro paměť hlídače a jeho log: je z nich vidět, co držíte a kdy.
 data/hlidac_stav.json
 data/hlidac*.log
+# Seznam sledovaných titulů je osobní; do gitu jde jen vzor.
+data/sledovane.txt

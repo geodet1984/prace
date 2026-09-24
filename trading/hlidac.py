@@ -48,7 +48,7 @@ logger = logging.getLogger(__name__)
 #: Zvedněte při každé změně toho, co se ukládá — jinak se starý stav načte
 #: jako by byl nový a hlídač buď zopakuje, co už řekl, nebo naopak zamlčí
 #: něco nového.
-STATE_VERSION = 1
+STATE_VERSION = 2
 
 #: Kolik dní předem upozornit na konec tříleté lhůty. Dva měsíce jsou
 #: kompromis: dost času na rozmyšlenou a prodej, ale ne tak brzy, aby se
@@ -86,10 +86,15 @@ class Stav:
     oznamene: set[str] = None
     posledni_hodnota: float | None = None
     posledni_beh: str | None = None
+    kategorie: dict[str, dict[str, str]] = None
+    """Poslední známý stav každého titulu (propad, trend, neklid). Hlásí se
+    změna, ne stav — „SPY je u maxima" každý den by nikdo nečetl."""
 
     def __post_init__(self) -> None:
         if self.oznamene is None:
             self.oznamene = set()
+        if self.kategorie is None:
+            self.kategorie = {}
 
     @classmethod
     def nacti(cls, path: str | Path) -> Stav:
@@ -115,6 +120,7 @@ class Stav:
             oznamene=set(data.get("oznamene", [])),
             posledni_hodnota=data.get("posledni_hodnota"),
             posledni_beh=data.get("posledni_beh"),
+            kategorie=data.get("kategorie", {}),
         )
 
     def uloz(self, path: str | Path) -> None:
@@ -129,6 +135,7 @@ class Stav:
                     "oznamene": sorted(self.oznamene),
                     "posledni_hodnota": self.posledni_hodnota,
                     "posledni_beh": self.posledni_beh,
+                    "kategorie": self.kategorie,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -143,6 +150,7 @@ def zpravy(
     prehled: dict,
     stav: Stav,
     k_datu: date | None = None,
+    trh: list[dict] | None = None,
 ) -> list[Zprava]:
     """Co je nového. Čistá funkce — nic nestahuje a nic neukládá.
 
@@ -233,6 +241,22 @@ def zpravy(
             )
         )
 
+    # --- změna stavu trhu -------------------------------------------------
+    # Jen změna proti minulému běhu. První pozorování titulu se nehlásí:
+    # nebylo s čím srovnávat a hlásit „nový" stav u všeho by byl šum.
+    nazvy = {"propad": "od maxima", "trend": "trend", "neklid": "kolísání"}
+    for r in trh or []:
+        predtim = stav.kategorie.get(r["symbol"])
+        if not predtim:
+            continue
+        zmeny = [f"{nazvy.get(k, k)}: {predtim.get(k)} → {v}"
+                 for k, v in r["kategorie"].items() if predtim.get(k) != v]
+        if zmeny:
+            out.append(Zprava(
+                kod=f"trh:{r['symbol']}:{r['den']}:{'/'.join(r['kategorie'].values())}",
+                text=f"{r['symbol']} změnil stav — {'; '.join(zmeny)}. {r['srovnani']['veta']}",
+            ))
+
     return out
 
 
@@ -242,9 +266,11 @@ def nove(zpravy_: list[Zprava], stav: Stav) -> list[Zprava]:
 
 
 def zapamatuj(zpravy_: list[Zprava], stav: Stav, hodnota: float | None,
-              k_datu: date | None = None) -> Stav:
+              k_datu: date | None = None, trh: list[dict] | None = None) -> Stav:
     """Poznamená, co bylo oznámeno, a aktuální hodnotu pro příští srovnání."""
     stav.oznamene |= {z.kod for z in zpravy_}
+    for r in trh or []:
+        stav.kategorie[r["symbol"]] = dict(r["kategorie"])
     if hodnota:
         stav.posledni_hodnota = hodnota
     stav.posledni_beh = (k_datu or date.today()).isoformat()

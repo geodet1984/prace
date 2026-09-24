@@ -251,3 +251,42 @@ def test_shrnuti_jedne_zpravy_je_ta_zprava():
 def test_shrnuti_zminuje_chyby_prednostne():
     text = shrnuti([Zprava("a", "x", "chyba"), Zprava("b", "y", "info")])
     assert "chyba" in text
+
+
+# --- změna stavu trhu ---------------------------------------------------
+
+
+def _trh(symbol, propad="u maxima", trend="nahoru", den="2026-09-24"):
+    return [{"symbol": symbol, "den": den,
+             "kategorie": {"propad": propad, "trend": trend, "neklid": "běžný"},
+             "srovnani": {"veta": "Podobný stav nastal 40×."}}]
+
+
+def test_zmena_stavu_trhu_se_ohlasi(kniha):
+    """Hlásí se změna, ne stav. „U maxima" každý den by nikdo nečetl."""
+    stav = Stav(kategorie={"SPY": {"propad": "u maxima", "trend": "nahoru", "neklid": "běžný"}})
+    zpr = zpravy(kniha, PREHLED, stav, k_datu=date(2026, 9, 24), trh=_trh("SPY", "korekce"))
+    trh = [z for z in zpr if z.kod.startswith("trh:")]
+    assert len(trh) == 1
+    assert "u maxima → korekce" in trh[0].text
+
+
+def test_beze_zmeny_stavu_se_trh_nehlasi(kniha):
+    stav = Stav(kategorie={"SPY": {"propad": "u maxima", "trend": "nahoru", "neklid": "běžný"}})
+    zpr = zpravy(kniha, PREHLED, stav, k_datu=date(2026, 9, 24), trh=_trh("SPY"))
+    assert not [z for z in zpr if z.kod.startswith("trh:")]
+
+
+def test_prvni_pozorovani_titulu_se_nehlasi(kniha):
+    """Nebylo s čím srovnat. Hlásit „nový stav" u všeho při zavedení je šum."""
+    zpr = zpravy(kniha, PREHLED, Stav(), k_datu=date(2026, 9, 24), trh=_trh("SPY"))
+    assert not [z for z in zpr if z.kod.startswith("trh:")]
+
+
+def test_kategorie_trhu_prezije_restart(tmp_path):
+    """Bod 5 z CLAUDE.md: bez uložení by se po restartu každá změna ztratila
+    — hlídač by vždycky viděl „první pozorování" a nehlásil nikdy nic."""
+    stav = Stav()
+    zapamatuj([], stav, None, date(2026, 9, 24), trh=_trh("SPY", "korekce"))
+    stav.uloz(tmp_path / "s.json")
+    assert Stav.nacti(tmp_path / "s.json").kategorie["SPY"]["propad"] == "korekce"

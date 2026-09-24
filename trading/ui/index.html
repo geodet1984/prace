@@ -312,6 +312,19 @@ footer   { animation-delay: .36s; }
   .wrap { padding: 0; }
   body { font-size: 12px; }
 }
+/* ── stav trhu ─────────────────────────────────────────────────────── */
+.titul { padding: 14px 0 16px; border-bottom: 1px solid var(--linka-slaba); }
+.titul:last-child { border-bottom: none; }
+.titul h3 { font-family: var(--display); font-size: 18px; margin: 0 0 2px; letter-spacing: .03em; }
+.titul .kdy { font-size: 12.5px; color: var(--ink-faint); font-style: italic; }
+.titul ul { margin: 8px 0; padding-left: 18px; }
+.titul li { margin: 2px 0; }
+.stitek { display: inline-block; font-variant: small-caps; letter-spacing: .05em; font-size: 13px;
+  border: 1px solid var(--linka); padding: 0 7px; margin-right: 6px; color: var(--ink-dim); }
+.historie { background: var(--papir-tmavy); padding: 9px 12px; margin: 8px 0; font-size: 14px; }
+.osa { font-size: 13px; color: var(--ink-dim); }
+.osa td { border-left: none; padding: 3px 12px 3px 0; text-align: left; }
+.osa table { min-width: 0; width: auto; }
 </style>
 </head>
 <body>
@@ -397,6 +410,16 @@ footer   { animation-delay: .36s; }
         <span class="hint">tři roky od data dávky. Není to daňové poradenství, jen rozdíl dat</span>
       </div>
       <div id="p-cas"></div>
+    </section>
+  </div>
+
+  <div id="trh" hidden>
+    <section>
+      <div class="head">
+        <h2>Stav trhu</h2>
+        <span class="hint">popis a historická četnost, ne předpověď ani doporučení</span>
+      </div>
+      <div id="trh-obsah"></div>
     </section>
   </div>
 
@@ -761,6 +784,29 @@ async function hlidej() {
   }
 }
 
+// ── stav trhu ──────────────────────────────────────────────────────────
+// Rozbor je pomalý (celá historie každého titulu), server ho drží hodinu.
+// Stránka se proto ptá jednou za deset minut, ne s každým tikem.
+async function nactiTrh() {
+  const json = await (await fetch("/api/trh", { cache: "no-store" })).json();
+  const tituly = json.tituly || [];
+  if (!tituly.length && !(json.chyby || []).length) { $("trh").hidden = true; return; }
+  $("trh").hidden = false;
+  const karta = r => {
+    const s = r.srovnani;
+    const osa = r.udalosti.length ? `<div class="osa">Kalendář za posledních 30 dní — souslednost, ne příčina:
+      <table>${r.udalosti.map(u => `<tr><td>${esc(u.den)}</td><td>${esc(u.udalost)}</td>
+        <td class="${u.reakce === null ? "" : sign(u.reakce)}">${u.reakce === null ? "—" : pct(u.reakce * 100)}</td></tr>`).join("")}</table></div>` : "";
+    return `<div class="titul">
+      <h3>${esc(r.symbol)}</h3><span class="kdy">k ${esc(r.den)}, cena ${dec(r.cena)}</span>
+      <div style="margin-top:6px">${Object.values(r.kategorie).map(k => `<span class="stitek">${esc(k)}</span>`).join("")}</div>
+      <ul>${r.vety.map(v => `<li>${esc(v)}</li>`).join("")}</ul>
+      <div class="historie">${esc(s.veta)}</div>${osa}</div>`;
+  };
+  $("trh-obsah").innerHTML = tituly.map(karta).join("") +
+    (json.chyby || []).map(c => `<div class="titul"><h3>${esc(c.symbol)}</h3><span class="kdy">${esc(c.chyba)}</span></div>`).join("");
+}
+
 (async () => {
   try { await nacti(); stav("aktuální", false); }
   catch (e) {
@@ -770,6 +816,8 @@ async function hlidej() {
   // Portfolio zvlášť a bez await v řadě: kniha může chtít kurzy ze sítě
   // a papírový účet na to nemá čekat.
   nactiPortfolio().catch(() => { $("portfolio").hidden = true; });
+  nactiTrh().catch(() => { $("trh").hidden = true; });
+  setInterval(() => nactiTrh().catch(() => {}), 600_000);
   setInterval(hlidej, 1500);
   addEventListener("resize", () => { if (data) graf(data.krivka); });
 })();

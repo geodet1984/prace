@@ -25,6 +25,7 @@ from . import fx as fx_module
 from . import hlidac as hlidac_module
 from . import ledger as ledger_module
 from . import stats as stats_module
+from . import stav_trhu as stav_trhu_module
 from . import strategies
 from . import vypis as vypis_module
 from .backtest import BacktestConfig, BacktestEngine
@@ -349,6 +350,43 @@ def _posledni_ceny(kniha) -> dict[str, float]:
     return ceny
 
 
+def _sledovane(args) -> list[str]:
+    """Co rozebrat: zadané tituly, jinak to, co držíte podle knihy."""
+    if args.symbols:
+        return [s.strip().upper() for s in args.symbols.split(",") if s.strip()]
+    kniha = Path(args.kniha)
+    if kniha.exists():
+        return sorted(ledger_module.Ledger.from_csv(kniha).holdings())
+    raise SystemExit("zadejte --symbols, nebo založte knihu (python -m trading zapis …)")
+
+
+def cmd_trh(args) -> int:
+    """Co se na titulech děje a jak podobné situace dopadaly. Nic nedoporučuje."""
+    try:
+        udalosti = EventCalendar.from_csv(args.calendar)
+    except FileNotFoundError:
+        udalosti = ()
+    for symbol in _sledovane(args):
+        try:
+            r = stav_trhu_module.rozbor(symbol, stav_trhu_module.nacti(symbol), udalosti,
+                                        horizont=args.horizont)
+        except (ValueError, data_module.DataError) as exc:
+            print(f"\n  {symbol}: {exc}")
+            continue
+        print(f"\n  {symbol} — k {r['den']}, cena {r['cena']:,.2f}")
+        print(f"  {'─' * 60}")
+        for veta in r["vety"]:
+            print(f"  • {veta}")
+        print(f"\n  Historie: {r['srovnani']['veta']}")
+        if r["udalosti"]:
+            print("\n  Kalendář za posledních 30 dní (souslednost, ne příčina):")
+            for u in r["udalosti"]:
+                reakce = "—" if u["reakce"] is None else f"{u['reakce'] * 100:+.1f} %"
+                print(f"    {u['den']}  {u['udalost']:<10} první den po: {reakce}")
+    print("\n  Popis a historická četnost, ne předpověď ani doporučení.\n")
+    return 0
+
+
 def cmd_hlidac(args) -> int:
     """Ozve se, jen když je co říct. Nic nedoporučuje.
 
@@ -360,8 +398,16 @@ def cmd_hlidac(args) -> int:
 
     stav_cesta = Path(args.stav)
     stav = hlidac_module.Stav.nacti(stav_cesta)
+    # Stav trhu u držených a sledovaných titulů; selhání nesmí zastavit
+    # hlídání lhůt a chyb v knize.
+    try:
+        trh = dashboard_module.trh_payload(
+            dashboard_module.sledovane_tituly(Path(args.kniha)))["tituly"]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("stav trhu se nepodařilo zjistit: %s", exc)
+        trh = []
     novinky = hlidac_module.serad(
-        hlidac_module.nove(hlidac_module.zpravy(kniha, prehled, stav), stav)
+        hlidac_module.nove(hlidac_module.zpravy(kniha, prehled, stav, trh=trh), stav)
     )
 
     if args.strucne:
@@ -380,7 +426,7 @@ def cmd_hlidac(args) -> int:
         )
 
     if not args.nezapisovat:
-        hlidac_module.zapamatuj(novinky, stav, prehled.get("hodnota"))
+        hlidac_module.zapamatuj(novinky, stav, prehled.get("hodnota"), trh=trh)
         stav.uloz(stav_cesta)
 
     return 10 if novinky else 0
@@ -1065,6 +1111,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="nezapamatovat si tenhle běh — na vyzkoušení, aniž by to umlčelo příště",
     )
     p_hlid.set_defaults(func=cmd_hlidac)
+
+    p_trh = sub.add_parser("trh", help="co se na titulech děje a jak podobné stavy dopadaly")
+    p_trh.add_argument("--symbols", help="tituly oddělené čárkou; bez nich ty z knihy")
+    p_trh.add_argument("--kniha", default="data/portfolio.csv", help="CSV s pohyby")
+    p_trh.add_argument("--calendar", default="data/udalosti.csv", help="kalendář událostí")
+    p_trh.add_argument("--horizont", type=int, default=63,
+                       help="za kolik obchodních dní se dívat, co následovalo (63 ≈ čtvrtletí)")
+    p_trh.set_defaults(func=cmd_trh)
 
     p_fetch = sub.add_parser("fetch", help="stáhnout a nacachovat data")
     add_data_args(p_fetch)

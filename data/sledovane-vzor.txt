@@ -1,0 +1,4 @@
+# Tituly, které chcete sledovat, i když je nedržíte. Jeden na řádek.
+# Co držíte podle knihy, se přidá samo.
+CSPX.AS
+IWDA.AS

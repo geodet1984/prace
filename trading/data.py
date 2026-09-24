@@ -111,10 +111,15 @@ def fetch(
         raise DataError("yfinance není nainstalován: pip install yfinance") from exc
 
     logger.info("stahuji %s (%s) %s..%s", symbol, interval, start or "začátek", end or "dnes")
+    # Bez začátku vrací yfinance u zadaného konce jen poslední měsíc — a ten
+    # by se pak uložil místo celé historie. Každé fetch(end=...) by tak tiše
+    # zničilo cache, ze které běží backtesty. "Od začátku" musí znamenat
+    # opravdu od začátku.
+    stahnout_od = start or "1970-01-01"
     try:
         raw = yf.download(
             symbol,
-            start=start,
+            start=stahnout_od,
             end=end,
             interval=interval,
             auto_adjust=False,
@@ -135,8 +140,17 @@ def fetch(
 
     df = _normalize(raw, symbol)
     if cached:
+        # Uložit jen tehdy, když nová data cache nezkracují. Kratší odpověď
+        # (výpadek, omezení burzy) nesmí přepsat delší historii.
+        if cached.exists():
+            try:
+                stara = load_csv(cached, symbol)
+                if stara.index[0] < df.index[0]:
+                    df = pd.concat([stara[stara.index < df.index[0]], df])
+            except DataError:
+                pass
         save_csv(df, cached)
-    return df
+    return _slice(df, start, end)
 
 
 def _covers(df: pd.DataFrame, start: str | None, end: str | None) -> bool:

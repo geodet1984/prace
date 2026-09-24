@@ -35,6 +35,7 @@ from pathlib import Path
 
 from . import fx as fx_module
 from . import ledger as ledger_module
+from . import stav_trhu as stav_trhu_module
 
 logger = logging.getLogger(__name__)
 
@@ -447,6 +448,61 @@ def _portfolio_payload(path: Path | None) -> dict:
 # --- server -------------------------------------------------------------
 
 
+# --- stav trhu ----------------------------------------------------------
+#
+# Rozbor stahuje historii každého titulu a počítá srovnání přes celou
+# historii — na požadavek po vteřině a půl je to příliš. Výsledek se proto
+# drží hodinu; denní data se za hodinu stejně nezmění.
+
+SLEDOVANE = Path("data/sledovane.txt")
+_TRH_PAMET: dict[tuple, tuple[float, dict]] = {}
+_TRH_PLATNOST_S = 3600
+
+
+def sledovane_tituly(ledger_path: Path | None, sledovane: Path = SLEDOVANE) -> list[str]:
+    """Co držíte podle knihy plus seznam ze ``sledovane.txt``.
+
+    Soubor je obyčejný text, jeden ticker na řádek, ``#`` uvozuje poznámku —
+    ať jde seznam upravit v jakémkoli editoru bez znalosti formátu.
+    """
+    tituly: set[str] = set()
+    if ledger_path and ledger_path.exists():
+        try:
+            tituly |= set(ledger_module.Ledger.from_csv(ledger_path).holdings())
+        except Exception as exc:  # noqa: BLE001 - rozbitá kniha nesmí shodit rozbor trhu
+            logger.warning("knihu pro výběr titulů nelze číst: %s", exc)
+    if sledovane.exists():
+        for radek in sledovane.read_text(encoding="utf-8").splitlines():
+            radek = radek.split("#")[0].strip().upper()
+            if radek:
+                tituly.add(radek)
+    return sorted(tituly)
+
+
+def trh_payload(tituly: list[str], kalendar: Path = Path("data/udalosti.csv")) -> dict:
+    """Rozbor stavu pro každý titul. Titul, který selže, se přizná, nezmizí."""
+    klic = tuple(tituly)
+    ted = time.time()
+    if klic in _TRH_PAMET and ted - _TRH_PAMET[klic][0] < _TRH_PLATNOST_S:
+        return _TRH_PAMET[klic][1]
+    try:
+        from .calendar import EventCalendar
+
+        udalosti = EventCalendar.from_csv(kalendar)
+    except FileNotFoundError:
+        udalosti = ()
+    rozbory, chyby = [], []
+    for symbol in tituly:
+        try:
+            df = stav_trhu_module.nacti(symbol)
+            rozbory.append(stav_trhu_module.rozbor(symbol, df, udalosti))
+        except Exception as exc:  # noqa: BLE001 - jeden titul nesmí shodit ostatní
+            chyby.append({"symbol": symbol, "chyba": str(exc)})
+    vysledek = {"tituly": rozbory, "chyby": chyby}
+    _TRH_PAMET[klic] = (ted, vysledek)
+    return vysledek
+
+
 class _Handler(BaseHTTPRequestHandler):
     """Read-only HTTP rozhraní. Žádná metoda kromě GET neexistuje."""
 
@@ -470,6 +526,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._send_snapshot()
         elif route == "/api/portfolio":
             self._send_portfolio()
+        elif route == "/api/trh":
+            self._send_trh()
         elif route == "/api/verze":
             self._send_json(self._versions())
         else:
@@ -516,6 +574,15 @@ class _Handler(BaseHTTPRequestHandler):
         except Exception as exc:  # noqa: BLE001 - i neznámá chyba je jen prázdný oddíl
             logger.exception("přehled portfolia selhal")
             payload = {"vedena": False, "duvod": f"knihu nelze zpracovat: {exc}"}
+        self._send_json(payload)
+
+    def _send_trh(self) -> None:
+        """Stav trhu u držených a sledovaných titulů. Chyba = prázdný oddíl."""
+        try:
+            payload = trh_payload(sledovane_tituly(self.ledger_path))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("rozbor trhu selhal")
+            payload = {"tituly": [], "chyby": [{"symbol": "—", "chyba": str(exc)}]}
         self._send_json(payload)
 
     def _send_json(self, payload: dict, status: int = 200) -> None:
