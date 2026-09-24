@@ -20,11 +20,14 @@ sebe — jinak by jedna epizoda počítala za dvacet a četnost by lhala.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from datetime import date
 
 import numpy as np
 import pandas as pd
+
+logger = logging.getLogger(__name__)
 
 MIN_PRIPADU = 8
 """Pod tímhle počtem se četnost neukazuje jako číslo — jen jako „málo dat"."""
@@ -237,4 +240,13 @@ def nacti(symbol: str) -> pd.DataFrame:
     df = data_module.fetch(symbol, end=dnes)
     if len(df) < 300:
         df = data_module.fetch(symbol, end=dnes, use_cache=False)
+    if symbol.upper().endswith(".PR"):
+        # Yahoo u Prahy místy opakuje starou cenu s nulovým objemem, přestože
+        # se obchodovalo. Takové dny se nahradí oficiálním kurzem z burzy.
+        from . import pse
+
+        try:
+            df = pse.oprav_radu(symbol, df)
+        except Exception as exc:  # noqa: BLE001 - bez opravy radši než vůbec
+            logger.warning("%s: opravu z BCPP se nepodařilo udělat (%s)", symbol, exc)
     return df

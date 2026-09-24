@@ -394,6 +394,17 @@ button.male { font-size: 12px; padding: 1px 8px; margin-left: 10px; vertical-ali
   .head .hint { text-align: left; }
   .titul h3 { font-size: 17px; }
 }
+/* ── grafy ─────────────────────────────────────────────────────────── */
+.chart .cara { fill: none; stroke-width: 2.2; stroke-linejoin: round; stroke-linecap: round; }
+.chart .cara.cena, .chart .cara.hodnota { stroke: var(--modra); }
+.chart .cara.vlozeno { stroke: var(--ink-faint); stroke-dasharray: 5 4; stroke-width: 1.6; }
+.chart .znacka { fill: var(--zelen-ink); stroke: var(--papir); stroke-width: 2; }
+.chart.maly { height: 180px; margin: 4px 0 8px; }
+.obdobi { display: flex; gap: 6px; margin-top: 8px; }
+.obdobi button.zvoleno { background: var(--modra); color: #04122a; }
+.legenda::before { content: ""; display: inline-block; width: 18px; height: 0; margin: 0 5px 3px 8px;
+  border-top: 2px solid var(--modra); vertical-align: middle; }
+.legenda.l-vlozeno::before { border-top: 2px dashed var(--ink-faint); }
 </style>
 </head>
 <body>
@@ -465,6 +476,14 @@ button.male { font-size: 12px; padding: 1px 8px; margin-left: 10px; vertical-ali
 
     <div class="figury" id="p-karty"></div>
     <div id="p-varovani"></div>
+
+    <section id="p-graf-oddil" hidden>
+      <div class="head">
+        <h2>Hodnota v čase</h2>
+        <span class="hint"><span class="legenda l-hodnota">majetek</span> <span class="legenda l-vlozeno">vloženo</span> · týdně, tehdejší ceny a kurzy ČNB</span>
+      </div>
+      <svg class="chart" id="p-graf"></svg>
+    </section>
 
     <section>
       <div class="head">
@@ -854,6 +873,59 @@ function pCas(rows) {
     </tr>`).join("")}</tbody></table></div>`;
 }
 
+// ── čárový graf ────────────────────────────────────────────────────────
+// Jeden kreslič pro všechny grafy: SVG přímo ve stránce, bez knihovny
+// z internetu (přehled běží i bez připojení a na telefonu přes Wi-Fi).
+// serie: [{dny: [...], hodnoty: [...], trida: "..."}]; osa X podle data.
+function carovyGraf(svg, serie, { vyska = 230, formatY = money, znacky = [] } = {}) {
+  const vse = serie.flatMap(s => s.hodnoty).filter(v => v != null);
+  const dny = serie.flatMap(s => s.dny).map(d => +new Date(d));
+  if (vse.length < 2) { svg.innerHTML = ""; return; }
+  const W = svg.clientWidth || 700, H = vyska, L = 64, R = 14, T = 12, B = 24;
+  let lo = Math.min(...vse), hi = Math.max(...vse);
+  const pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.05 || 1; lo -= pad; hi += pad;
+  const t0 = Math.min(...dny), t1 = Math.max(...dny);
+  const x = d => L + ((+new Date(d) - t0) / ((t1 - t0) || 1)) * (W - L - R);
+  const y = v => T + (1 - (v - lo) / (hi - lo)) * (H - T - B);
+  const mrizka = [0, 1, 2, 3, 4].map(i => {
+    const v = lo + (hi - lo) * i / 4, yy = y(v).toFixed(1);
+    return `<line class="grid" x1="${L}" x2="${W - R}" y1="${yy}" y2="${yy}"/>
+            <text x="${L - 8}" y="${+yy + 3}" text-anchor="end">${formatY(v)}</text>`;
+  }).join("");
+  const popisky = [t0, (t0 + t1) / 2, t1].map((t, i) =>
+    `<text x="${x(t).toFixed(1)}" y="${H - 6}" text-anchor="${["start", "middle", "end"][i]}">${new Date(t).toLocaleDateString("cs-CZ", { month: "numeric", year: "numeric" })}</text>`).join("");
+  const cary = serie.map(s => {
+    const d = s.dny.map((den, i) => s.hodnoty[i] == null ? "" : `${i ? "L" : "M"}${x(den).toFixed(1)},${y(s.hodnoty[i]).toFixed(1)}`).join("");
+    return `<path class="cara ${s.trida || ""}" d="${d}"/>`;
+  }).join("");
+  const body = znacky.map(z => `<circle class="znacka" cx="${x(z.den).toFixed(1)}" cy="${y(z.hodnota).toFixed(1)}" r="4"><title>${esc(z.popis)}</title></circle>`).join("");
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = mrizka + cary + body + popisky;
+}
+
+async function nactiGrafPortfolia() {
+  const r = await (await fetch("/api/graf/portfolio", { cache: "no-store" })).json();
+  const b = r.body || [];
+  if (b.length < 2) { $("p-graf-oddil").hidden = true; return; }
+  $("p-graf-oddil").hidden = false;
+  const dny = b.map(x => x.den);
+  carovyGraf($("p-graf"), [
+    { dny, hodnoty: b.map(x => x.vlozeno), trida: "vlozeno" },
+    { dny, hodnoty: b.map(x => x.hodnota), trida: "hodnota" },
+  ]);
+}
+
+// Graf ceny u titulu: 1 rok nebo 5 let, vybírá se bez dotazu na server.
+function grafTitulu(svg, grafy, roky) {
+  const graf = grafy[String(roky)];
+  const dny = graf.dny, ceny = graf.ceny;
+  const imax = ceny.indexOf(Math.max(...ceny));
+  carovyGraf(svg, [{ dny, hodnoty: ceny, trida: "cena" }], {
+    vyska: 180, formatY: v => dec(v, v < 100 ? 2 : 0),
+    znacky: imax >= 0 ? [{ den: dny[imax], hodnota: ceny[imax], popis: `maximum ${dec(ceny[imax])} (${dny[imax]})` }] : [],
+  });
+}
+
 async function nactiPortfolio() {
   let json;
   try {
@@ -994,11 +1066,21 @@ async function nactiTrh() {
       <h3>${esc(r.symbol)}${odebrat(r.symbol)}</h3><span class="kdy">k ${esc(r.den)}, cena ${dec(r.cena)}</span>
       <div style="margin-top:6px">${Object.values(r.kategorie).map(k => `<span class="stitek">${esc(k)}</span>`).join("")}</div>
       <ul>${r.vety.map(v => `<li>${esc(v)}</li>`).join("")}</ul>
+      ${r.graf && r.graf["1"].dny.length > 1 ? `<div class="obdobi" data-sym="${esc(r.symbol)}">
+        <button type="button" class="male zvoleno" data-let="1">1 rok</button>
+        <button type="button" class="male" data-let="5">5 let</button></div>
+        <svg class="chart maly" data-graf="${esc(r.symbol)}"></svg>` : ""}
       <div class="historie">${esc(s.veta)}</div>${investori(r.investori)}${osa}</div>`;
   };
   $("trh-obsah").innerHTML = tituly.map(karta).join("") +
     (json.chyby || []).map(c => `<div class="titul"><h3>${esc(c.symbol)}${odebrat(c.symbol)}</h3><span class="kdy">${esc(c.chyba)}</span></div>`).join("");
-}
+
+  const podleSym = Object.fromEntries(tituly.map(r => [r.symbol, r.graf]));
+  document.querySelectorAll("svg[data-graf]").forEach(s => grafTitulu(s, podleSym[s.dataset.graf], 1));
+  document.querySelectorAll(".obdobi").forEach(o => o.querySelectorAll("button").forEach(b => b.onclick = () => {
+    o.querySelectorAll("button").forEach(x => x.classList.toggle("zvoleno", x === b));
+    grafTitulu(document.querySelector(`svg[data-graf="${o.dataset.sym}"]`), podleSym[o.dataset.sym], +b.dataset.let);
+  }));}
 
 // ── zápis do knihy ─────────────────────────────────────────────────────
 // Server zápis přijme jen s touhle hlavičkou; cizí web ji poslat nemůže.
@@ -1136,6 +1218,7 @@ let papirZobrazit = false;
   // Portfolio zvlášť a bez await v řadě: kniha může chtít kurzy ze sítě
   // a papírový účet na to nemá čekat.
   nactiPortfolio().catch(() => { $("portfolio").hidden = true; });
+  nactiGrafPortfolia().catch(() => {});
   pripravZapis().catch(() => {});
   $("s-form").onsubmit = e => { e.preventDefault(); hledat(e.target.symbol.value.trim()); };
   nactiTrh().catch(() => { $("trh").hidden = true; });

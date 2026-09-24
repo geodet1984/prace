@@ -208,3 +208,45 @@ def oficialni_kurz(ticker: str) -> Kurz | None:
     except Exception as exc:  # noqa: BLE001 - bez lístku se použije Yahoo
         logger.warning("%s: kurz z BCPP nezjištěn (%s)", ticker, exc)
         return None
+
+
+def oprav_radu(ticker: str, df, let: float = 5.0, listek_k=None):
+    """Nahradí u pražského titulu podezřelé dny z Yahoo oficiálním kurzem.
+
+    Yahoo u některých pražských titulů celé týdny opakuje poslední cenu
+    s nulovým objemem, přestože se podle burzy obchodovalo — u Colt CZ
+    v létě 2026 dva měsíce „1 020 Kč, 0 ks" místo skutečných 906–996 Kč.
+    Graf i srovnání s historií by pak stály na cenách, které neexistovaly.
+
+    Podezřelý je každý den s nulovým objemem. Pro něj se stáhne kurzovní
+    lístek; obchodovalo-li se ten den, vezme se oficiální závěrečný kurz
+    a objem. Neobchodovalo-li se opravdu, řádek zůstane — opakovaná cena
+    je pak správný popis. Stahuje se jen podezřelé, jednou staženo
+    zůstává v cache. ``listek_k`` jde podstrčit v testech.
+    """
+    import pandas as pd
+
+    if not ticker.upper().endswith(".PR") or df is None or df.empty or "volume" not in df:
+        return df
+    listek_k = listek_k or (lambda den: kurzovni_listek(den, zpet_dni=0))
+    dnes = listek_k(date.today()) or dnesni_listek()
+    kurz = pro_ticker(ticker, dnes) if dnes else None
+    if kurz is None:
+        return df
+    isin = kurz.isin
+
+    od = df.index[-1] - pd.Timedelta(days=int(365.25 * let))
+    podezrele = df.index[(df.index >= od) & (df["volume"].fillna(0) == 0)]
+    if len(podezrele) == 0:
+        return df
+    df = df.copy()
+    opraveno = 0
+    for ts in podezrele:
+        k = listek_k(ts.date()).get(isin)
+        if k and k.obchodovano_dnes and k.zaverecny > 0:
+            df.loc[ts, "close"] = k.zaverecny
+            df.loc[ts, "volume"] = k.kusu
+            opraveno += 1
+    if opraveno:
+        logger.info("%s: %d dní z Yahoo nahrazeno oficiálním kurzem BCPP", ticker, opraveno)
+    return df

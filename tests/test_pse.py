@@ -61,3 +61,32 @@ def test_mimo_prahu_se_lístek_nepouziva():
 def test_ceske_formatovani():
     veta = pse.veta(pse.precti_ak(AK)["CZ0005112300"])
     assert "1 350,00 Kč" in veta and "-0,95 %" in veta and "62 462 ks" in veta
+
+
+def test_den_s_nulovym_objemem_se_opravi_oficialnim_kurzem(monkeypatch):
+    """Yahoo u Colt CZ dva měsíce opakovalo 1 020 Kč s nulovým objemem,
+    přestože se obchodovalo za 906–996 Kč. Takový den se musí nahradit
+    kurzem z burzy; skutečně neobchodovaný den zůstat, jak je."""
+    import pandas as pd
+
+    dny = pd.bdate_range("2026-06-15", periods=3)
+    df = pd.DataFrame({"close": [1020.0, 1020.0, 1020.0], "volume": [0, 0, 500]}, index=dny)
+
+    def kurz(den, cena, obchod):
+        return pse.Kurz("CZ0009008942", "COLTCZ", "BAACZGCE", den, cena, 0, 0, 0, 0,
+                        100, 1.0, obchod)
+
+    listky = {
+        dny[0].date(): {"CZ0009008942": kurz(dny[0].date(), 996.0, dny[0].date())},
+        # druhý den se opravdu neobchodovalo — lístek nese starší obchod
+        dny[1].date(): {"CZ0009008942": kurz(dny[1].date(), 996.0, dny[0].date())},
+    }
+    monkeypatch.setattr(pse, "pro_ticker",
+                        lambda t, listek, p=None: next(iter(listek.values()), None))
+    vychozi = listky[dny[0].date()]
+    opraveno = pse.oprav_radu("COLT.PR", df, listek_k=lambda d: listky.get(d, vychozi))
+
+    assert opraveno.loc[dny[0], "close"] == 996.0 and opraveno.loc[dny[0], "volume"] == 100
+    assert opraveno.loc[dny[1], "close"] == 1020.0, "neobchodovaný den se nemění"
+    assert opraveno.loc[dny[2], "close"] == 1020.0, "den s objemem je v pořádku"
+    assert df.loc[dny[0], "close"] == 1020.0, "původní data se nepřepisují"

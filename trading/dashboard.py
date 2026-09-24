@@ -35,6 +35,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 from . import fx as fx_module
+from . import grafy as grafy_module
 from . import iphone as iphone_module
 from . import ledger as ledger_module
 from . import pozice_investoru as pozice_module
@@ -593,6 +594,9 @@ def trh_payload(tituly: list[str], kalendar: Path = Path("data/udalosti.csv")) -
             df = stav_trhu_module.nacti(symbol)
             r = stav_trhu_module.rozbor(symbol, df, udalosti)
             r["investori"] = pozice_module.rozbor(symbol, df)
+            # Rok zvlášť, denně; pětiletá řada je zředěná a na rok by byla hrubá.
+            r["graf"] = {"1": grafy_module.cenova_rada(df, let=1),
+                         "5": grafy_module.cenova_rada(df, let=5)}
             oficialni = pse_module.oficialni_kurz(symbol)
             if oficialni:
                 # Oficiální kurz nahoru: je přímo od burzy a nese objem obchodů.
@@ -647,6 +651,28 @@ def uloz_pristup(zdroj: str, hodnota: str, soubor: Path = SEC_KONTAKT) -> None:
         soubor.write_text(hodnota + "\n", encoding="utf-8")
     elif soubor.exists():
         soubor.unlink()
+
+
+_GRAF_PAMET: dict[tuple, tuple[float, list]] = {}
+
+
+def graf_portfolia(ledger_path: Path | None) -> dict:
+    """Hodnota portfolia v čase. Drží se hodinu nebo do změny knihy."""
+    if not ledger_path or not ledger_path.exists():
+        return {"body": []}
+    klic = (str(ledger_path), ledger_path.stat().st_mtime)
+    if klic in _GRAF_PAMET and time.time() - _GRAF_PAMET[klic][0] < _TRH_PLATNOST_S:
+        return {"body": _GRAF_PAMET[klic][1]}
+    kniha = ledger_module.Ledger.from_csv(ledger_path)
+    historie = {}
+    for symbol in {t.symbol for t in kniha.transactions if t.symbol}:
+        try:
+            historie[symbol] = stav_trhu_module.nacti(symbol)
+        except Exception as exc:  # noqa: BLE001 - chybějící titul graf nepoloží
+            logger.warning("%s: historie pro graf nezjištěna (%s)", symbol, exc)
+    body = grafy_module.portfolio_v_case(kniha, historie, fx_module.Kurzovnik())
+    _GRAF_PAMET[klic] = (time.time(), body)
+    return {"body": body}
 
 
 class _Handler(BaseHTTPRequestHandler):
@@ -742,6 +768,12 @@ class _Handler(BaseHTTPRequestHandler):
                              "pristupy": stav_pristupu() if self.mistni else []})
         elif route == "/api/sledovane":
             self._send_json({"tituly": nacti_sledovane(self.sledovane)})
+        elif route == "/api/graf/portfolio":
+            try:
+                self._send_json(graf_portfolia(self.ledger_path))
+            except Exception as exc:  # noqa: BLE001
+                logger.exception("graf portfolia selhal")
+                self._send_json({"body": [], "chyba": str(exc)})
         elif route == "/api/hledat":
             from urllib.parse import parse_qs, urlsplit
 
