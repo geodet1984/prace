@@ -543,9 +543,10 @@ button.male { font-size: 12px; padding: 1px 8px; margin-left: 10px; vertical-ali
       </div>
       <form id="s-form" class="formular" autocomplete="off">
         <label class="siroke">Sledovat titul, fond nebo index
-          <input name="symbol" placeholder="např. NVDA, IWDA.AS, ^GDAXI (DAX), BTC-USD"></label>
-        <div class="tlacitka"><button type="submit">Přidat ke sledování</button></div>
+          <input name="symbol" placeholder="název nebo zkratka: Komerční banka, CEZ.PR, SAP, BTC-USD"></label>
+        <div class="tlacitka"><button type="submit">Hledat</button></div>
         <div id="s-zprava" class="siroke faint"></div>
+        <div id="s-nalezeno" class="siroke"></div>
       </form>
       <div id="trh-obsah"></div>
     </section>
@@ -947,6 +948,32 @@ async function sledovat(akce, symbol) {
   } catch (e) { $("s-zprava").textContent = e.message; }
 }
 
+// Hledání titulu podle názvu. Výsledek se nepřidá sám — vyberete ho,
+// protože „Erste" je v Praze, ve Vídni i jinde a každá kotace má jinou měnu.
+async function hledat(dotaz) {
+  if (!dotaz) return;
+  $("s-zprava").textContent = "Hledám…";
+  $("s-nalezeno").innerHTML = "";
+  try {
+    const r = await (await fetch(`/api/hledat?q=${encodeURIComponent(dotaz)}`, { cache: "no-store" })).json();
+    if (r.chyba) throw new Error(r.chyba);
+    if (!r.vysledky.length) { $("s-zprava").textContent = `Pro „${dotaz}" nic nenalezeno.`; return; }
+    $("s-zprava").textContent = "Vyberte, kterou kotaci sledovat:";
+    $("s-nalezeno").innerHTML = `<table class="osa" style="width:100%"><tbody>${r.vysledky.map(v => `<tr>
+      <td><b>${esc(v.symbol)}</b></td><td>${esc(v.nazev)}</td>
+      <td class="faint">${esc(v.burza)} · ${esc(v.druh)}</td>
+      <td style="text-align:right">${sledovane.includes(v.symbol) ? `<span class="up">sledujete</span>`
+        : `<button type="button" class="male" onclick="vybrat('${esc(v.symbol)}')">Sledovat</button>`}</td>
+    </tr>`).join("")}</tbody></table>`;
+  } catch (e) { $("s-zprava").textContent = e.message; }
+}
+
+async function vybrat(symbol) {
+  $("s-nalezeno").innerHTML = "";
+  $("s-form").reset();
+  await sledovat("pridat", symbol);
+}
+
 async function nactiTrh() {
   $("trh").hidden = false;
   sledovane = (await (await fetch("/api/sledovane", { cache: "no-store" })).json()).tituly || [];
@@ -1110,8 +1137,7 @@ let papirZobrazit = false;
   // a papírový účet na to nemá čekat.
   nactiPortfolio().catch(() => { $("portfolio").hidden = true; });
   pripravZapis().catch(() => {});
-  $("s-form").onsubmit = e => { e.preventDefault(); const f = e.target;
-    if (f.symbol.value.trim()) { sledovat("pridat", f.symbol.value.trim()); f.reset(); } };
+  $("s-form").onsubmit = e => { e.preventDefault(); hledat(e.target.symbol.value.trim()); };
   nactiTrh().catch(() => { $("trh").hidden = true; });
   setInterval(() => nactiTrh().catch(() => {}), 600_000);
   setInterval(hlidej, 1500);

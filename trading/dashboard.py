@@ -504,6 +504,51 @@ def uprav_sledovane(soubor: Path, akce: str, symbol: str) -> list[str]:
     return tituly
 
 
+# Burzy, které dávají smysl nahoře: Praha a hlavní evropské, pak USA.
+_BURZY = {"PRA": "Praha", "GER": "Xetra", "FRA": "Frankfurt", "VIE": "Vídeň",
+          "AMS": "Amsterdam", "PAR": "Paříž", "MIL": "Milán", "LSE": "Londýn",
+          "EBS": "Švýcarsko", "MCE": "Madrid", "WSE": "Varšava", "NMS": "Nasdaq",
+          "NYQ": "NYSE", "NGM": "Nasdaq", "PCX": "NYSE Arca", "CCC": "krypto"}
+_PORADI = ["PRA", "GER", "VIE", "AMS", "PAR", "MIL", "LSE", "EBS", "MCE", "WSE",
+           "NMS", "NYQ", "NGM", "PCX", "CCC"]
+
+
+def hledat_tituly(dotaz: str, limit: int = 8) -> list[dict]:
+    """Najde titul podle názvu i zkratky (Yahoo). Jen čte, nic neukládá.
+
+    Bez diakritiky, protože Yahoo „Komerční" nezná, ale „Komercni" ano.
+    """
+    import unicodedata
+
+    import yfinance as yf
+
+    dotaz = "".join(z for z in unicodedata.normalize("NFKD", dotaz or "")
+                    if not unicodedata.combining(z)).strip()
+    if len(dotaz) < 2:
+        return []
+    try:
+        vysledky = yf.Search(dotaz, max_results=15).quotes
+    except Exception as exc:  # noqa: BLE001
+        raise ValueError(f"hledání na Yahoo selhalo: {exc}") from exc
+    out = []
+    for q in vysledky:
+        symbol = q.get("symbol")
+        if not symbol or not _TICKER.match(symbol.upper()):
+            continue
+        burza = q.get("exchange", "")
+        out.append({"symbol": symbol.upper(),
+                    "nazev": q.get("longname") or q.get("shortname") or "",
+                    "burza": _BURZY.get(burza, q.get("exchDisp") or burza),
+                    "druh": {"EQUITY": "akcie", "ETF": "ETF", "INDEX": "index",
+                             "CRYPTOCURRENCY": "krypto", "MUTUALFUND": "fond"}
+                    .get(q.get("quoteType", ""), q.get("quoteType", "").lower()),
+                    "_poradi": _PORADI.index(burza) if burza in _PORADI else 99})
+    out.sort(key=lambda x: x["_poradi"])
+    for x in out:
+        del x["_poradi"]
+    return out[:limit]
+
+
 def sledovane_tituly(ledger_path: Path | None, sledovane: Path = SLEDOVANE) -> list[str]:
     """Co držíte podle knihy plus seznam ze ``sledovane.txt``.
 
@@ -687,6 +732,14 @@ class _Handler(BaseHTTPRequestHandler):
                              "pristupy": stav_pristupu() if self.mistni else []})
         elif route == "/api/sledovane":
             self._send_json({"tituly": nacti_sledovane(self.sledovane)})
+        elif route == "/api/hledat":
+            from urllib.parse import parse_qs, urlsplit
+
+            dotaz = parse_qs(urlsplit(self.path).query).get("q", [""])[0]
+            try:
+                self._send_json({"vysledky": hledat_tituly(dotaz)})
+            except ValueError as exc:
+                self._send_json({"chyba": str(exc), "vysledky": []}, status=502)
         elif route == "/api/zapis":
             # Stránka se ptá, jestli má formulář ukázat. Bez knihy není kam psát.
             self._send_json({"povoleno": self.ledger_path is not None,
